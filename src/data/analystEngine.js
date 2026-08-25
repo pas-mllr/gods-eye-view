@@ -33,6 +33,16 @@ export const ANALYST_LAYERS = {
   'ais-live-vessels': { numeric: ['speedKts', 'courseDeg'], text: ['name', 'mmsi', 'shipType', 'destination', 'navStatus'], flags: [] },
   'local-firms': { numeric: ['frp'], text: ['confidence', 'satellite'], flags: [] },
   earthquakes: { numeric: ['magnitude', 'depthKm'], text: ['place'], flags: [] },
+  'local-tp-radar': {
+    numeric: ['cbcrThresholdEur', 'citRate'],
+    text: ['name', 'iso2', 'tpDeadline', 'apa', 'oecdAlignment'],
+    flags: ['tpDocRequired', 'masterFileRequired', 'localFileRequired', 'cbcrRequired', 'apaBilateral', 'mapAvailable'],
+  },
+  'local-tax-disputes': {
+    numeric: ['mapInventoryTp', 'mapNewCasesTp', 'mapAvgMonthsTp', 'treatyCount', 'whtDividendPct', 'whtInterestPct', 'whtRoyaltyPct'],
+    text: ['name', 'iso2', 'auditIntensity', 'auditFocus'],
+    flags: ['arbitrationAvailable', 'icapMember', 'mliSigned', 'participationExemption'],
+  },
 };
 
 const EARTH_R_KM = 6371;

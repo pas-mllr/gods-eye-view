@@ -7,6 +7,19 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
+- Added a Tax Advisory Radar for global tax teams: two bundled jurisdiction
+  layers — TP Radar (transfer-pricing obligations, CbCR/master/local-file
+  requirements, APA availability, CIT rates) and Tax Disputes & M&A (MAP
+  caseload approximations, editorial audit intensity, treaty counts, domestic
+  withholding rates) — covering 51 jurisdictions, curated from OECD publications
+  and public national law with per-record as-of dates (`docs/TAX-ADVISORY.md`).
+- Tax layers are analyst-queryable by voice ("which jurisdictions require
+  CbCR?", "highest MAP inventory in Europe") via a new opt-in analyst-record
+  mapper on bundled GeoJSON layers, and "tax radar" works as a named voice view.
+- The cockpit regional news brief slants to tax coverage while a tax layer is
+  enabled (server-whitelisted `topic=tax` on `/api/regional-brief`).
+- The first-run launcher gained a TAX RADAR mission tile.
+
 - Added honest aircraft identity narration: callsign, operator, registration,
   type, and route come only from selected-contact context, and missing operator,
   route, or type enrichment is named explicitly.

@@ -5155,6 +5155,7 @@ function openAiRealtimeProxy() {
             // GEV_REALTIME_TOOLS is deliberately untouched — deleting this one
             // string is the whole rollback.
             'NAMED VIEWS are shorthand for tool calls you already have — there is no "mode" tool for them. Treat ONLY these as the shorthand: "infrastructure mode" / "the infrastructure view" / "show me global infrastructure" means three set_layer_visibility calls (local-datacenters, local-dams, telegeography-submarine-cables) plus zoom_to_globe; "environmental mode" / "earth watch" / "active events", said as the name of a view, means set_layer_visibility for local-firms and earthquakes plus zoom_to_globe. Anything vaguer is NOT this shorthand — an open-ended question about the world or the news is an ordinary question: answer it, or use analyst_query over the layers already on. Never switch a whole view on to answer a question nobody asked to see. When you do run one, make every call before speaking, then give one confirmation naming the resulting state; if the fires layer comes back unavailable because no FIRMS key is configured, say so plainly — the earthquakes still loaded. "Live contacts" and "space missions" are NOT this pattern: they stay set_context_mode{mode:"contacts"} and set_context_mode{mode:"space-missions"}.',
+            '"Tax radar" / "the tax view" / "global tax view" means two set_layer_visibility calls (local-tp-radar, local-tax-disputes) plus zoom_to_globe. Questions about transfer pricing obligations, CbCR, master/local file, APAs, MAP caseloads, audit intensity, treaties, or withholding rates over those layers use analyst_query. Both are BUNDLED curated snapshots, not live feeds — if asked how current the data is, say it is a bundled snapshot with per-record as-of dates, not live.',
             'For visual filter requests, call set_visual_style with one of the allowed style IDs.',
             'Disambiguation table — basemap vs layer vs style: basemap switching requires an explicit stack name — "Bing aerial" means set_map_stack bing-aerial, "aerial with labels" means bing-labels, "OSM"/"road map" means osm, "Google 3D"/"photorealistic" means photoreal. Any mention of "satellite" or "satellites" ALWAYS means the satellites DATA LAYER via set_layer_visibility, never a basemap. "surveillance"/"night vision"/"thermal" are visual STYLES via set_visual_style.',
             'HUD requests ("hud on/off", "switch to operator/minimal/tactical layout") use set_hud. Detection requests ("detection on", "dense mode", "balanced mode", "sparse mode", "set density to 25", "use weighted allocation") use set_detection. Density snaps to 0/25/50/75/100 and derives Sparse/Balanced/Dense; panoptic is a legacy alias for Dense.',
@@ -5640,7 +5641,7 @@ const GEV_REALTIME_TOOLS = [
         layerId: {
           type: 'string',
           description:
-            'Common-name mapping for the non-obvious ids: space mission(s) → rocket-launches; fires/wildfires/active fires → local-firms (NASA FIRMS); ships/vessels/boats → ais-live-vessels; undersea/submarine cables → telegeography-submarine-cables; datacenters → local-datacenters; dams → local-dams; bikes/bike share → bikeshare; street traffic/congestion → traffic; traffic cameras → cctv; internet radio/stations → radio.',
+            'Common-name mapping for the non-obvious ids: space mission(s) → rocket-launches; fires/wildfires/active fires → local-firms (NASA FIRMS); ships/vessels/boats → ais-live-vessels; undersea/submarine cables → telegeography-submarine-cables; datacenters → local-datacenters; dams → local-dams; bikes/bike share → bikeshare; street traffic/congestion → traffic; traffic cameras → cctv; internet radio/stations → radio; transfer pricing/TP → local-tp-radar; tax disputes/tax audits/MAP cases → local-tax-disputes.',
           enum: [
             'flights',
             'military',
@@ -5656,6 +5657,8 @@ const GEV_REALTIME_TOOLS = [
             'local-dams',
             'telegeography-submarine-cables',
             'local-firms',
+            'local-tp-radar',
+            'local-tax-disputes',
           ],
         },
         enabled: { type: 'boolean' },
@@ -5687,6 +5690,8 @@ const GEV_REALTIME_TOOLS = [
             'local-dams',
             'telegeography-submarine-cables',
             'local-firms',
+            'local-tp-radar',
+            'local-tax-disputes',
           ],
           description: 'Optional layer row to scroll into view and highlight.',
         },
@@ -6104,8 +6109,8 @@ const GEV_REALTIME_TOOLS = [
       properties: {
         layers: {
           type: 'array',
-          items: { type: 'string', enum: ['flights', 'military', 'ais-live-vessels', 'local-firms', 'earthquakes'] },
-          description: 'Layers to query. fires/wildfires → local-firms; ships/vessels → ais-live-vessels.',
+          items: { type: 'string', enum: ['flights', 'military', 'ais-live-vessels', 'local-firms', 'earthquakes', 'local-tp-radar', 'local-tax-disputes'] },
+          description: 'Layers to query. fires/wildfires → local-firms; ships/vessels → ais-live-vessels; transfer pricing/TP obligations → local-tp-radar; tax disputes/audits/MAP/withholding/treaties → local-tax-disputes.',
         },
         scope: {
           type: 'object',
@@ -6120,7 +6125,7 @@ const GEV_REALTIME_TOOLS = [
         },
         filters: {
           type: 'array',
-          description: 'Attribute predicates, ANDed. ALTITUDE IS METERS (40,000 ft = 12192). Fields: altitudeM, speedMps, military, onGround, aircraftClass, callsign, operator, routeOrigin, routeDestination, originCountry (flights); speedKts, shipType, destination (ships); frp, confidence (fires); magnitude, depthKm, place (earthquakes).',
+          description: 'Attribute predicates, ANDed. ALTITUDE IS METERS (40,000 ft = 12192). Fields: altitudeM, speedMps, military, onGround, aircraftClass, callsign, operator, routeOrigin, routeDestination, originCountry (flights); speedKts, shipType, destination (ships); frp, confidence (fires); magnitude, depthKm, place (earthquakes); name, iso2, citRate, cbcrRequired, masterFileRequired, localFileRequired, apaBilateral, tpDeadline (local-tp-radar); auditIntensity, mapInventoryTp, mapAvgMonthsTp, treatyCount, whtDividendPct, whtInterestPct, whtRoyaltyPct, arbitrationAvailable, mliSigned, participationExemption (local-tax-disputes).',
           items: {
             type: 'object',
             additionalProperties: false,
@@ -7041,11 +7046,33 @@ function fetchRegionalPlace(point) {
   return task;
 }
 
-async function fetchRegionalNews(place) {
+/** News topics the regional brief may slant toward. Server-side whitelist. */
+export const REGIONAL_NEWS_TOPICS = Object.freeze(['tax']);
+
+/**
+ * Build the news search expression for one place and optional topic. Pure and
+ * exported for unit tests. topic=null reproduces the classic bare-place query
+ * verbatim; 'tax' scopes the same place to tax-advisory coverage. Both Google
+ * News RSS `q` and the GDELT DOC `query` accept the quoted-phrase OR syntax.
+ * @param {string} place Raw place string (locality/region/country).
+ * @param {string|null} [topic] One of REGIONAL_NEWS_TOPICS, or null.
+ * @returns {string|null} Search expression, or null for an empty place.
+ */
+export function regionalNewsQuery(place, topic = null) {
+  const cleaned = String(place ?? '').replace(/["\\]/g, ' ').trim();
+  if (!cleaned) return null;
+  if (topic === 'tax') {
+    return `"${cleaned}" (tax OR "transfer pricing" OR "tax authority" OR OECD OR "tax audit")`;
+  }
+  return cleaned;
+}
+
+async function fetchRegionalNews(place, topic = null) {
   const query = place?.locality || place?.region || place?.country;
-  if (!query) return { status: 'unavailable', query: null, articles: [], source: null };
+  const expression = regionalNewsQuery(query, topic);
+  if (!expression) return { status: 'unavailable', query: null, articles: [], source: null };
   const rssParams = new URLSearchParams({
-    q: String(query).replace(/["\\]/g, ' ').trim(),
+    q: expression,
     hl: 'en-US',
     gl: 'US',
     ceid: 'US:en',
@@ -7059,7 +7086,9 @@ async function fetchRegionalNews(place) {
     if (articles.length) return { status: 'ready', query, articles, source: 'Google News RSS' };
   } catch { /* fall through to the existing free index */ }
   const params = new URLSearchParams({
-    query: `"${String(query).replace(/["\\]/g, ' ').trim()}"`,
+    // The classic bare-place query is phrase-wrapped for GDELT exactly as
+    // before; a topic expression already carries its own quoting.
+    query: topic ? expression : `"${expression}"`,
     mode: 'artlist',
     format: 'json',
     maxrecords: '5',
@@ -7101,14 +7130,14 @@ export function regionalBriefHasAnySource({ place, weather, news } = {}) {
 }
 
 function regionalBriefProxy() {
-  async function refresh(point, key) {
+  async function refresh(point, key, topic = null) {
     const [placeResult, weatherResult] = await Promise.allSettled([
       fetchRegionalPlace(point),
       fetchRegionalWeather(point),
     ]);
     const place = placeResult.status === 'fulfilled' ? placeResult.value : null;
     const weather = weatherResult.status === 'fulfilled' ? weatherResult.value : null;
-    const news = await fetchRegionalNews(place);
+    const news = await fetchRegionalNews(place, topic);
     if (!regionalBriefHasAnySource({ place, weather, news })) {
       throw new Error('All regional briefing sources unavailable');
     }
@@ -7123,6 +7152,7 @@ function regionalBriefProxy() {
       newsStatus: news.status,
       newsQuery: news.query,
       newsSource: news.source,
+      newsTopic: topic,
       articles: news.articles,
     };
     _regionalBriefCache.set(key, { payload, cachedAt: Date.now() });
@@ -7149,7 +7179,13 @@ function regionalBriefProxy() {
         res.end(JSON.stringify({ error: 'Valid latitude and longitude are required' }));
         return;
       }
-      const key = `${(Math.round(point.latitude * 10) / 10).toFixed(1)},${(Math.round(point.longitude * 10) / 10).toFixed(1)}`;
+      // Unknown topics are ignored (plain brief), never an error — the topic
+      // is a slant, not a contract, and the whitelist lives server-side.
+      const requestedTopic = url.searchParams.get('topic');
+      const topic = REGIONAL_NEWS_TOPICS.includes(requestedTopic) ? requestedTopic : null;
+      // Topic is part of the cache identity: a tax brief and a plain brief for
+      // the same point are different payloads and must not serve each other.
+      const key = `${(Math.round(point.latitude * 10) / 10).toFixed(1)},${(Math.round(point.longitude * 10) / 10).toFixed(1)}${topic ? `|${topic}` : ''}`;
       const now = Date.now();
       const cached = _regionalBriefCache.get(key);
       if (cached && now - cached.cachedAt <= REGIONAL_BRIEF_CACHE_MS) {
@@ -7157,7 +7193,7 @@ function regionalBriefProxy() {
         res.end(JSON.stringify({ ...cached.payload, status: 'cached' }));
         return;
       }
-      const request = coalesceProxyRequest(_regionalBriefInFlight, key, () => refresh(point, key));
+      const request = coalesceProxyRequest(_regionalBriefInFlight, key, () => refresh(point, key, topic));
       try {
         const payload = await request.promise;
         res.writeHead(200, {

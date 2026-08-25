@@ -7,6 +7,8 @@ import createViteConfig, {
   LL2_CACHE_TTL_MS,
   readResponseJsonCapped,
   regionalBriefHasAnySource,
+  REGIONAL_NEWS_TOPICS,
+  regionalNewsQuery,
   validMilitaryInstallationBox,
   validRegionalPoint,
 } from '../../vite.config.js';
@@ -95,4 +97,27 @@ test('regional brief treats an all-source outage as total failure', () => {
     weather: null,
     news: { status: 'unavailable' },
   }), true);
+});
+
+test('regional news query: null topic reproduces the classic bare-place query', () => {
+  assert.equal(regionalNewsQuery('Austin'), 'Austin');
+  assert.equal(regionalNewsQuery('  Austin  ', null), 'Austin');
+  // Quote/backslash stripping is unchanged from the pre-topic implementation.
+  assert.equal(regionalNewsQuery('Aus"tin\\'), 'Aus tin');
+  assert.equal(regionalNewsQuery(''), null);
+  assert.equal(regionalNewsQuery('   '), null);
+  assert.equal(regionalNewsQuery(null), null);
+});
+
+test('regional news query: the tax topic scopes the place to tax coverage', () => {
+  assert.equal(
+    regionalNewsQuery('Amsterdam', 'tax'),
+    '"Amsterdam" (tax OR "transfer pricing" OR "tax authority" OR OECD OR "tax audit")',
+  );
+  // An empty place stays unavailable even with a topic.
+  assert.equal(regionalNewsQuery('', 'tax'), null);
+  // The whitelist is the middleware's contract; the helper itself treats any
+  // non-tax topic as the plain query rather than inventing an expression.
+  assert.equal(regionalNewsQuery('Amsterdam', 'sports'), 'Amsterdam');
+  assert.deepEqual([...REGIONAL_NEWS_TOPICS], ['tax']);
 });

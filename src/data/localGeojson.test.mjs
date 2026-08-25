@@ -53,6 +53,7 @@ class MockLayerEvent {
 async function createRealLocalLayerHarness({
   sampleHeightSupported = false,
   sampleHeight = () => { throw new Error('tiles not sampleable yet'); },
+  layerOptions = {},
 } = {}) {
   const originalFetch = globalThis.fetch;
   const originalWindow = globalThis.window;
@@ -126,6 +127,7 @@ async function createRealLocalLayerHarness({
       setInputAction() {},
       destroy() {},
     }),
+    ...layerOptions,
   });
   try {
     await layer.enable(viewer);
@@ -962,4 +964,84 @@ test('after the cap a camera-motion frame still samples, and re-opens the budget
     GROUND_SAMPLE_MAX_ARMED_RETRIES,
     'a grounded record asks for no further frames',
   );
+});
+
+test('tax layer card copy compresses the jurisdiction posture into one line', () => {
+  assert.deepEqual(localInfrastructureOverlayCopy({
+    name: 'Germany',
+    cbcrRequired: true,
+    masterFileRequired: true,
+    localFileRequired: true,
+    apa: 'unilateral+bilateral',
+  }, 'local-tp-radar'), {
+    title: 'Germany',
+    details: ['CbCR ✓ · MF/LF ✓ · APA bilateral'],
+  });
+
+  // Local-file-only jurisdictions say so instead of overclaiming MF/LF.
+  assert.deepEqual(localInfrastructureOverlayCopy({
+    name: 'United States',
+    cbcrRequired: true,
+    masterFileRequired: false,
+    localFileRequired: true,
+    apa: 'unilateral+bilateral',
+  }, 'local-tp-radar'), {
+    title: 'United States',
+    details: ['CbCR ✓ · LF ✓ · APA bilateral'],
+  });
+
+  assert.deepEqual(localInfrastructureOverlayCopy({
+    name: 'Germany',
+    mapInventoryTp: 420,
+    auditIntensity: 'very-high',
+  }, 'local-tax-disputes'), {
+    title: 'Germany',
+    details: ['MAP inv 420 · audit very-high'],
+  });
+
+  // A jurisdiction with no MAP figure still gets an honest partial line.
+  assert.deepEqual(localInfrastructureOverlayCopy({
+    name: 'United Arab Emirates',
+    mapInventoryTp: null,
+    auditIntensity: 'low',
+  }, 'local-tax-disputes'), {
+    title: 'United Arab Emirates',
+    details: ['audit low'],
+  });
+});
+
+test('getAnalystRecords is opt-in: no mapper means no records, ever', async () => {
+  const harness = await createRealLocalLayerHarness();
+  try {
+    assert.deepEqual(harness.layer.getAnalystRecords(), [],
+      'a mapper-less layer (datacenters/dams) stays invisible to analyst queries');
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});
+
+test('getAnalystRecords maps loaded records through the option and empties on disable', async () => {
+  const harness = await createRealLocalLayerHarness({
+    layerOptions: {
+      analystRecord: (props, { id, lat, lon }) => ({
+        id: props?.name || String(id), lat, lon, river: props?.tags?.associated_river ?? null,
+      }),
+    },
+  });
+  try {
+    const records = harness.layer.getAnalystRecords();
+    assert.equal(records.length, 1);
+    assert.equal(records[0].id, 'Runtime Dam');
+    assert.equal(records[0].river, 'Test River');
+    assert.ok(Number.isFinite(records[0].lat) && Number.isFinite(records[0].lon),
+      'anchor degrees ride along for spatial scoping');
+
+    harness.layer.disable(harness.viewer);
+    assert.deepEqual(harness.layer.getAnalystRecords(), [],
+      'a disabled layer must not answer analyst queries');
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
 });

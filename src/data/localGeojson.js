@@ -90,6 +90,22 @@ export function localInfrastructureOverlayCopy(properties, layerId) {
     if (river && river.toLocaleLowerCase() !== title.toLocaleLowerCase()) {
       details.push(clampCardLine(river));
     }
+  } else if (layerId === 'local-tp-radar') {
+    const parts = [];
+    if (props.cbcrRequired === true) parts.push('CbCR ✓');
+    if (props.masterFileRequired === true && props.localFileRequired === true) parts.push('MF/LF ✓');
+    else if (props.localFileRequired === true) parts.push('LF ✓');
+    const apa = cleanLabel(props.apa);
+    if (apa && apa !== 'none') parts.push(`APA ${apa === 'unilateral+bilateral' ? 'bilateral' : apa}`);
+    if (parts.length) details.push(clampCardLine(parts.join(' · ')));
+  } else if (layerId === 'local-tax-disputes') {
+    const parts = [];
+    // Strict check: Number(null) is 0, and a null MAP figure means "no
+    // reliable public figure", which must not render as an inventory of null.
+    if (Number.isFinite(props.mapInventoryTp)) parts.push(`MAP inv ${props.mapInventoryTp}`);
+    const audit = cleanLabel(props.auditIntensity);
+    if (audit) parts.push(`audit ${audit}`);
+    if (parts.length) details.push(clampCardLine(parts.join(' · ')));
   }
 
   return { title, details };
@@ -287,6 +303,7 @@ export function createLocalGeoJsonLayer({
   labels = true,
   labelMax = DEFAULT_LABEL_MAX,
   labelGridPx = DEFAULT_LABEL_GRID_PX,
+  analystRecord = null,
   overlayHost = DEFAULT_OVERLAY_HOST,
   screenSpaceEventHandlerFactory = (canvas) => new Cesium.ScreenSpaceEventHandler(canvas),
   projectToWindow = (scene, position) => Cesium.SceneTransforms.worldToWindowCoordinates(scene, position),
@@ -395,6 +412,31 @@ export function createLocalGeoJsonLayer({
      */
     getStats: () => {
       return { count: _count, lastUpdate: _lastUpdate, error: _error };
+    },
+
+    /**
+     * Snapshot the bundled records as plain JSON-safe objects for the analyst
+     * query engine, through the layer's opt-in `analystRecord` mapper. Layers
+     * without a mapper stay invisible to analyst queries (unchanged behavior
+     * for datacenters/dams). On-demand only — no per-frame cost.
+     * @param {number} [maxCount=2000] Maximum records to return.
+     * @returns {Array<Object>} Mapper-shaped records, [] while disabled.
+     */
+    getAnalystRecords: (maxCount = 2000) => {
+      if (typeof analystRecord !== 'function') return [];
+      if (!_enabled || !_dataSource || !_dataSource.show) return [];
+      const limit = Number.isFinite(maxCount) ? Math.max(1, Math.floor(maxCount)) : 2000;
+      const result = [];
+      for (const record of _stemRecords) {
+        if (result.length >= limit) break;
+        const mapped = analystRecord(record.properties || {}, {
+          id: record.id,
+          lat: Cesium.Math.toDegrees(record.carto.latitude),
+          lon: Cesium.Math.toDegrees(record.carto.longitude),
+        });
+        if (mapped) result.push(mapped);
+      }
+      return result;
     },
 
     enable: async (viewer) => {
@@ -535,6 +577,7 @@ export function createLocalGeoJsonLayer({
             _stemRecords.push({
               id: recordId,
               entity: feature,
+              properties,
               carto,
               base,
               tip,
@@ -888,5 +931,7 @@ function clampCardLine(value) {
 function layerTitle(layerId) {
   if (layerId === 'local-datacenters') return 'Datacenter';
   if (layerId === 'local-dams') return 'Dam';
+  if (layerId === 'local-tp-radar') return 'TP Jurisdiction';
+  if (layerId === 'local-tax-disputes') return 'Tax Disputes Jurisdiction';
   return 'Feature';
 }

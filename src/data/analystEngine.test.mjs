@@ -201,3 +201,56 @@ test('helpers: haversine sanity + scope radius', () => {
   const scoped = applyScope(FLIGHTS, { kind: 'radius' }, { center: { lat: 30.27, lon: -97.74 }, km: 50 });
   assert.deepEqual(scoped.map((f) => f.id).sort(), ['GND1', 'SWA1']);
 });
+
+// ── Tax advisory layers ─────────────────────────────────────────────
+// Sample jurisdiction records shaped like taxAnalystRecords.js mappers emit.
+const TP_JURISDICTIONS = [
+  { id: 'Germany', lat: 52.52, lon: 13.405, name: 'Germany', iso2: 'DE', cbcrRequired: true, masterFileRequired: true, localFileRequired: true, apaBilateral: true, citRate: 29.9, cbcrThresholdEur: 750000000, apa: 'unilateral+bilateral' },
+  { id: 'United States', lat: 38.9072, lon: -77.0369, name: 'United States', iso2: 'US', cbcrRequired: true, masterFileRequired: false, localFileRequired: true, apaBilateral: true, citRate: 21, cbcrThresholdEur: 750000000, apa: 'unilateral+bilateral' },
+  { id: 'New Zealand', lat: -41.2865, lon: 174.7762, name: 'New Zealand', iso2: 'NZ', cbcrRequired: true, masterFileRequired: false, localFileRequired: false, apaBilateral: true, citRate: 28, cbcrThresholdEur: 750000000, apa: 'unilateral+bilateral' },
+];
+const DISPUTE_JURISDICTIONS = [
+  { id: 'Germany', lat: 52.52, lon: 13.755, name: 'Germany', iso2: 'DE', auditIntensity: 'very-high', mapInventoryTp: 420, treatyCount: 96, whtRoyaltyPct: 15.825, mliSigned: true, arbitrationAvailable: true },
+  { id: 'India', lat: 28.6139, lon: 77.559, name: 'India', iso2: 'IN', auditIntensity: 'very-high', mapInventoryTp: 780, treatyCount: 94, whtRoyaltyPct: 20, mliSigned: true, arbitrationAvailable: false },
+  { id: 'United Arab Emirates', lat: 24.4539, lon: 54.7273, name: 'United Arab Emirates', iso2: 'AE', auditIntensity: 'low', mapInventoryTp: null, treatyCount: 140, whtRoyaltyPct: 0, mliSigned: true, arbitrationAvailable: false },
+];
+
+function makeTaxEngine() {
+  return createAnalystEngine({
+    getRecords: (key) => ({
+      'local-tp-radar': TP_JURISDICTIONS,
+      'local-tax-disputes': DISPUTE_JURISDICTIONS,
+    }[key] || []),
+    resolveRegionRing: async () => null,
+    getViewContext: () => ({ lat: 50, lon: 10, viewRadiusKm: 2500 }),
+  });
+}
+
+test('analyst: tax layers are declared and flag filters work over jurisdictions', async () => {
+  const r = await makeTaxEngine().query({
+    layers: ['local-tp-radar'], scope: { kind: 'anywhere' },
+    filters: [{ field: 'masterFileRequired', op: 'eq', value: true }],
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.items.map((i) => i.id), ['Germany']);
+});
+
+test('analyst: MAP inventory sorts descending and null figures never match filters', async () => {
+  const r = await makeTaxEngine().query({
+    layers: ['local-tax-disputes'], scope: { kind: 'anywhere' },
+    filters: [{ field: 'mapInventoryTp', op: 'gt', value: 100 }],
+    sortBy: 'mapInventoryTp', sortDir: 'desc',
+  });
+  assert.equal(r.ok, true);
+  // The UAE's null inventory is dropped by the filter, never coerced to 0.
+  assert.deepEqual(r.items.map((i) => i.id), ['India', 'Germany']);
+  assert.equal(r.summary.mapInventoryTpMax, 780);
+});
+
+test('analyst: withholding-rate threshold scan works with numeric fields', async () => {
+  const r = await makeTaxEngine().query({
+    layers: ['local-tax-disputes'], scope: { kind: 'anywhere' },
+    filters: [{ field: 'whtRoyaltyPct', op: 'gte', value: 15 }],
+  });
+  assert.deepEqual(r.items.map((i) => i.id).sort(), ['Germany', 'India']);
+});

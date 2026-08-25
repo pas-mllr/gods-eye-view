@@ -115,6 +115,14 @@ export const FIRST_RUN_MISSIONS = Object.freeze({
     layerIds: Object.freeze(['earthquakes', 'local-firms']),
     busyText: 'Scanning active events…',
   }),
+  'tax-radar': Object.freeze({
+    kind: 'globe',
+    // Two bundled snapshots, ~100 point entities total — far under the entity
+    // budget that removed the old INFRASTRUCTURE tile, and keyless by nature,
+    // so the tile always delivers exactly what it promises.
+    layerIds: Object.freeze(['local-tp-radar', 'local-tax-disputes']),
+    busyText: 'Loading global tax radar…',
+  }),
   explore: Object.freeze({ kind: 'none' }),
 });
 
