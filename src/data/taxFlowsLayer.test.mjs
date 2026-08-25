@@ -37,10 +37,14 @@ function makeHarness({ responses }) {
   return { layer, viewer, dataSources };
 }
 
-test('enable loads the pack and builds one arc per drawable flow', async () => {
+test('the manager-driven first update builds one arc per drawable flow', async () => {
   const { layer, viewer, dataSources } = makeHarness({ responses: [{ body: PACK_PAYLOAD }] });
   try {
+    // The manager contract: enable() itself never fetches (that would double
+    // every load); the manager runs the first update() immediately after.
     await layer.enable(viewer);
+    assert.equal(layer.getStats().count, 0, 'enable alone fetches nothing');
+    await layer.update(viewer);
     const stats = layer.getStats();
     assert.equal(stats.count, 1, 'the coordinate-less flow is skipped, not fatal');
     assert.equal(stats.error, null);
@@ -59,16 +63,16 @@ test('enable loads the pack and builds one arc per drawable flow', async () => {
   }
 });
 
-test('an unreachable pack degrades the enable instead of failing it', async () => {
+test('an unreachable pack degrades the enable cycle instead of failing it', async () => {
   const { layer, viewer } = makeHarness({ responses: [new Error('offline')] });
   try {
     await layer.enable(viewer);
+    // The manager contract: update must never read as lifecycle failure.
+    const outcome = await layer.update(viewer);
+    assert.notEqual(outcome, false);
     const stats = layer.getStats();
     assert.equal(layerFeedState(stats), 'unavailable');
     assert.deepEqual(layer.getAnalystRecords(), []);
-    // The manager contract: enable/update must never read as lifecycle failure.
-    const outcome = await layer.update(viewer);
-    assert.notEqual(outcome, false);
   } finally {
     layer.destroy(viewer);
   }
@@ -78,6 +82,7 @@ test('disable gates analyst records; a later refresh failure keeps the arcs', as
   const { layer, viewer } = makeHarness({ responses: [{ body: PACK_PAYLOAD }, new Error('offline')] });
   try {
     await layer.enable(viewer);
+    await layer.update(viewer);
     await layer.update(viewer);
     const stats = layer.getStats();
     assert.equal(stats.count, 1, 'previous arcs survive a failed refresh');

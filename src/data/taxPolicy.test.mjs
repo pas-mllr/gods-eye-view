@@ -94,3 +94,23 @@ test('enums and bands are frozen and ordered most-urgent-first', () => {
   const maxes = URGENCY_BANDS.map((b) => b.maxDays);
   assert.deepEqual(maxes, [...maxes].sort((a, b) => a - b));
 });
+
+test('pastness is per kind: history is not an obligation', () => {
+  // A mandate live since 2008 must not render "overdue" forever (the bug the
+  // review caught: ~25 jurisdictions painted permanently red).
+  assert.equal(nearestObligation({ eInvoicingFrom: '2008-04-01' }, NOW), null);
+  assert.equal(deadlineUrgency({ eInvoicingFrom: '2008-04-01' }, NOW).band, null);
+  // The stale go-live also never outranks a genuinely upcoming deadline.
+  const brazilish = nearestObligation({
+    eInvoicingFrom: '2008-04-01',
+    girNextDeadline: '2027-03-31',
+  }, NOW);
+  assert.equal(brazilish.kind, 'gir');
+  assert.equal(brazilish.days, 218);
+  // A recently missed GIR deadline IS actionable (late filing) …
+  assert.equal(nearestObligation({ girNextDeadline: '2026-06-30' }, NOW).days, -56);
+  // … but not beyond a year of staleness.
+  assert.equal(nearestObligation({ girNextDeadline: '2024-06-30' }, NOW), null);
+  // An expired safe harbour is state, not a deadline.
+  assert.equal(nearestObligation({ safeHarbourUntil: '2026-01-01' }, NOW), null);
+});

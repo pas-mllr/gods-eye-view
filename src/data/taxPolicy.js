@@ -51,7 +51,14 @@ export function daysUntil(dateIso, nowMs) {
 
 /**
  * The jurisdiction's nearest dated obligation across the three tracked kinds.
- * Past dates still count (they are the MOST urgent), sorted by date ascending.
+ *
+ * Pastness is PER KIND: a mandate that went live years ago is history, not an
+ * obligation — without this rule the ~25 jurisdictions whose e-invoicing has
+ * been live since 2008–2024 would render permanently "overdue" and drown out
+ * the real deadlines this feature exists to surface. Only a recently missed
+ * GIR deadline (≤365d — an actionable late filing) counts while past;
+ * e-invoicing go-lives and safe-harbour ends must be upcoming.
+ *
  * @param {object} props Jurisdiction record properties.
  * @param {number} nowMs Reference clock.
  * @returns {{kind: 'safe-harbour-end'|'e-invoicing'|'gir', dateIso: string, days: number}|null}
@@ -59,14 +66,15 @@ export function daysUntil(dateIso, nowMs) {
 export function nearestObligation(props, nowMs) {
   if (!props || typeof props !== 'object') return null;
   const candidates = [
-    { kind: 'safe-harbour-end', dateIso: props.safeHarbourUntil },
-    { kind: 'e-invoicing', dateIso: props.eInvoicingFrom },
-    { kind: 'gir', dateIso: props.girNextDeadline },
+    { kind: 'safe-harbour-end', dateIso: props.safeHarbourUntil, allowPastDays: 0 },
+    { kind: 'e-invoicing', dateIso: props.eInvoicingFrom, allowPastDays: 0 },
+    { kind: 'gir', dateIso: props.girNextDeadline, allowPastDays: 365 },
   ];
   let best = null;
   for (const candidate of candidates) {
     const days = daysUntil(candidate.dateIso, nowMs);
     if (days === null) continue;
+    if (days < -candidate.allowPastDays) continue;
     if (!best || days < best.days) {
       best = { kind: candidate.kind, dateIso: String(candidate.dateIso), days };
     }

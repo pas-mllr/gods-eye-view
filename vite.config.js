@@ -2020,23 +2020,37 @@ function entityFootprintProxy() {
     const sourceFile = configured || DEFAULT_FOOTPRINT_FILE;
     const resolved = path.isAbsolute(sourceFile) ? sourceFile : path.resolve(__dirname, sourceFile);
     try {
-      if (!fs.existsSync(resolved)) return { raw: null, packSource: null };
+      if (!fs.existsSync(resolved)) {
+        // A missing CONFIGURED pack is an operator mistake and must be loud —
+        // an empty 200 with no warning would hide the typo behind a nominal
+        // zero-count chip. (The missing default example only means a trimmed
+        // install; that stays quiet.)
+        const loadWarnings = configured
+          ? [`configured pack not found: ${resolved} (ENTITY_FOOTPRINT_FILE)`]
+          : [];
+        return { raw: null, packSource: null, loadWarnings };
+      }
       const parsed = JSON.parse(fs.readFileSync(resolved, 'utf8'));
       if (parsed && typeof parsed === 'object') {
-        return { raw: parsed, packSource: configured ? 'file' : 'example' };
+        return { raw: parsed, packSource: configured ? 'file' : 'example', loadWarnings: [] };
       }
+      return { raw: null, packSource: null, loadWarnings: [`pack is not a JSON object: ${resolved}`] };
     } catch (error) {
-      console.warn('[entity-footprint-proxy] failed to read pack:', resolved, error?.message || error);
+      return {
+        raw: null,
+        packSource: null,
+        loadWarnings: [`failed to read pack ${resolved}: ${error?.message || error}`],
+      };
     }
-    return { raw: null, packSource: null };
   }
 
   function getPack() {
     const now = Date.now();
     if (cached && now - cachedAt < ENTITY_FOOTPRINT_CACHE_MS) return cached;
-    const { raw, packSource } = loadRawPack();
+    const { raw, packSource, loadWarnings } = loadRawPack();
     const maxEntities = Math.max(1, Math.min(500, Number(process.env.ENTITY_FOOTPRINT_MAX) || 200));
     const pack = normalizeFootprintPack(raw || {}, taxJurisdictionIndex(), { maxEntities });
+    pack.warnings = [...loadWarnings, ...pack.warnings];
     for (const warning of pack.warnings) {
       console.warn(`[entity-footprint-proxy] ${warning}`);
     }

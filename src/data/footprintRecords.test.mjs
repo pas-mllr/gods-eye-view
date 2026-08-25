@@ -83,3 +83,11 @@ test('every flow type in the demo pack has a color', () => {
     assert.ok(FLOW_TYPE_COLORS[flow.type], `color for flow type ${flow.type}`);
   }
 });
+
+test('coincident-endpoint flows degenerate to ground points instead of NaN', () => {
+  const positions = flowArcPositions({ fromLat: 52.37, fromLon: 4.9, toLat: 52.37, toLon: 4.9 });
+  assert.equal(positions.length, 2);
+  for (const p of positions) {
+    assert.ok([p.x, p.y, p.z].every(Number.isFinite), 'no NaN cartesians');
+  }
+});

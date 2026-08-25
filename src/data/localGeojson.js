@@ -3,6 +3,7 @@ import { governorRequestRender } from '../renderGovernor.js';
 import {
   clearSelectedEntityContextForLayer,
   registerEntityContext,
+  removeEntityContextsForLayer,
   selectEntityContext,
 } from './contextStore.js';
 import {
@@ -335,6 +336,7 @@ export function createLocalGeoJsonLayer({
   applyLive = null,
   refreshInterval = 0,
   liveSourceLabel = null,
+  reloadOnEnable = false,
   overlayHost = DEFAULT_OVERLAY_HOST,
   screenSpaceEventHandlerFactory = (canvas) => new Cesium.ScreenSpaceEventHandler(canvas),
   projectToWindow = (scene, position) => Cesium.SceneTransforms.worldToWindowCoordinates(scene, position),
@@ -529,6 +531,20 @@ export function createLocalGeoJsonLayer({
       _groundRetryArms = 0; // fresh give-up budget per enable-cycle
       _lastGroundSampleCapability = null;
       _overlayPublisher.show();
+
+      // Config-pack layers (env-pointed sources like the entity footprint)
+      // opt into a re-fetch on every enable so pack edits land on the next
+      // toggle. The cached source and its context records are torn down
+      // FIRST — stale records would keep removed entities voice-selectable.
+      if (reloadOnEnable && _dataSource) {
+        removeEntityContextsForLayer(id);
+        try { viewer?.dataSources?.remove(_dataSource, true); } catch { /* already gone */ }
+        _dataSource = null;
+        _stemRecords = [];
+        _count = 0;
+        _liveAt = null;
+        _liveStale = false;
+      }
 
       // 1. Initialize data source
       if (!_dataSource) {

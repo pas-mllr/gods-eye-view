@@ -7,6 +7,7 @@ import {
 import {
   clearSelectedEntityContextForLayer,
   registerEntityContext,
+  removeEntityContextsForLayer,
   selectEntityContext,
 } from './contextStore.js';
 import { eventDecayAlpha, mapTaxEventAnalystRecord } from './taxEventsFeed.js';
@@ -130,11 +131,15 @@ export function createTaxEventsLayer({
      * an offline enable fail instead of degrade).
      */
     async update(viewer) {
+      if (!_dataSource) return true;
       let payload = null;
       try {
         const response = await fetchImpl(API_URL);
         if (response.ok) payload = await response.json();
       } catch { /* handled below */ }
+      // Re-check after the await: a destroy during an in-flight poll nulls
+      // the source, and the late resolution must not dereference it.
+      if (!_dataSource) return true;
       if (!payload || !Array.isArray(payload.points)) {
         _error = 'live feed unavailable';
         return true;
@@ -142,6 +147,10 @@ export function createTaxEventsLayer({
 
       _points = payload.points;
       _dataSource.entities.removeAll();
+      // Prune before re-registering: a jurisdiction that fell out of the 72h
+      // window would otherwise stay voice-selectable, pointing at a removed
+      // entity (the stale-subject bug militaryInstallations fixed the same way).
+      removeEntityContextsForLayer('tax-events');
       const overlayEntries = [];
       for (const point of _points) {
         if (!Number.isFinite(point.lat) || !Number.isFinite(point.lon)) continue;
@@ -229,6 +238,7 @@ export function createTaxEventsLayer({
 
     destroy(viewer) {
       layer.disable(viewer);
+      removeEntityContextsForLayer('tax-events');
       if (_clickHandler) {
         _clickHandler.destroy();
         _clickHandler = null;

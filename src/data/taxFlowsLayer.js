@@ -2,6 +2,7 @@ import * as Cesium from 'cesium';
 import {
   clearSelectedEntityContextForLayer,
   registerEntityContext,
+  removeEntityContextsForLayer,
   selectEntityContext,
 } from './contextStore.js';
 import { mapTaxFlowAnalystRecord } from './footprintRecords.js';
@@ -42,6 +43,15 @@ export function flowArcPositions(flow, samples = ARC_SAMPLES) {
   const from = Cesium.Cartographic.fromDegrees(flow.fromLon, flow.fromLat);
   const to = Cesium.Cartographic.fromDegrees(flow.toLon, flow.toLat);
   const geodesic = new Cesium.EllipsoidGeodesic(from, to);
+  // Coincident endpoints (two entities at one address): the geodesic
+  // interpolation divides by zero and yields NaN cartesians. Degenerate to
+  // the two ground points — the polyline draws nothing, nothing throws.
+  if (!(geodesic.surfaceDistance > 0)) {
+    return [
+      Cesium.Ellipsoid.WGS84.cartographicToCartesian(from),
+      Cesium.Ellipsoid.WGS84.cartographicToCartesian(to),
+    ];
+  }
   const distanceKm = geodesic.surfaceDistance / 1000;
   const apexM = Math.min(800_000, Math.max(30_000, distanceKm * 40));
   const positions = [];
@@ -98,9 +108,9 @@ export function createTaxFlowsLayer({
           }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
       }
-      // Config-pack semantics: (re)load on enable so pack edits land on the
-      // next toggle. A failed load degrades via getStats, never fails enable.
-      await layer.update(viewer);
+      // No fetch here: the manager runs the first update() immediately after
+      // enable, so an in-enable load would double every fetch and rebuild.
+      // Pack edits still land on the next toggle through that manager call.
     },
 
     disable(viewer) {
@@ -118,6 +128,8 @@ export function createTaxFlowsLayer({
         const response = await fetchImpl('/api/entity-footprint');
         if (response.ok) pack = await response.json();
       } catch { /* handled below */ }
+      // Re-check after the await: a destroy during the fetch nulls the source.
+      if (!_dataSource) return true;
       if (!pack || !Array.isArray(pack.flows)) {
         _error = _lastUpdate ? 'pack refresh unavailable' : 'entity pack unavailable';
         return true;
@@ -126,6 +138,9 @@ export function createTaxFlowsLayer({
       _flows = pack.flows;
       _groupLabel = pack.group ?? null;
       _dataSource.entities.removeAll();
+      // Prune before re-registering so flows removed from the pack do not
+      // stay voice-selectable against removed entities.
+      removeEntityContextsForLayer('tax-flows');
       for (const flow of _flows) {
         if (![flow.fromLat, flow.fromLon, flow.toLat, flow.toLon].every(Number.isFinite)) continue;
         const positions = flowArcPositions(flow);
@@ -180,6 +195,7 @@ export function createTaxFlowsLayer({
 
     destroy(viewer) {
       layer.disable(viewer);
+      removeEntityContextsForLayer('tax-flows');
       if (_clickHandler) {
         _clickHandler.destroy();
         _clickHandler = null;

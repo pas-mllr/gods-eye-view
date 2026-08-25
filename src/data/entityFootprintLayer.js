@@ -11,8 +11,8 @@ import { mapFootprintAnalystRecord } from './footprintRecords.js';
  * click-to-select context, analyst records, and share-link persistence all
  * come from the shared implementation — stem color is the risk band.
  *
- * Pack edits are picked up on the next enable cycle (dataset semantics,
- * same as every factory layer).
+ * reloadOnEnable: pack edits genuinely land on the next toggle — the factory
+ * tears down the cached source (and its context records) and re-fetches.
  */
 const entityFootprintLayer = createLocalGeoJsonLayer({
   id: 'entity-footprint',
@@ -26,6 +26,7 @@ const entityFootprintLayer = createLocalGeoJsonLayer({
   labelGridPx: 140,
   markerColor: (props) => riskBandColor(props?.riskBand),
   analystRecord: mapFootprintAnalystRecord,
+  reloadOnEnable: true,
 });
 
 export default entityFootprintLayer;

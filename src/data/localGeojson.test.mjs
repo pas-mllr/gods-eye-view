@@ -1182,3 +1182,77 @@ test('layers without live hooks keep the classic no-op update contract', async (
     harness.cleanup();
   }
 });
+
+test('reloadOnEnable re-fetches the source so pack edits land on the next toggle', async () => {
+  // The harness restores globalThis.fetch after the first enable, so drive
+  // the layer manually with a swappable fetch via a second harness pattern.
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = { dispatchEvent() {} };
+  let packVersion = 1;
+  // Polygon geometry like the main harness fixture: Cesium's Point marker
+  // path needs a DOM canvas (pin builder), which node:test does not have.
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({
+      type: 'Feature',
+      id: `entity-v${packVersion}`,
+      properties: { name: `Entity v${packVersion}` },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[[4.90, 52.37], [4.91, 52.37], [4.91, 52.38], [4.90, 52.37]]],
+      },
+    }),
+  });
+  const dataSources = [];
+  const viewer = {
+    selectedEntity: undefined,
+    dataSources: {
+      add(ds) { dataSources.push(ds); return ds; },
+      remove(ds) { const i = dataSources.indexOf(ds); if (i >= 0) dataSources.splice(i, 1); return i >= 0; },
+    },
+    camera: {
+      positionWC: Cesium.Cartesian3.fromDegrees(4.9, 52.37, 100_000),
+      frustum: { fov: Math.PI / 3 },
+      moveEnd: new MockLayerEvent(),
+      flyTo() {},
+    },
+    scene: {
+      canvas: { clientWidth: 800, clientHeight: 600 },
+      preRender: new MockLayerEvent(),
+      sampleHeightSupported: false,
+      sampleHeight() { throw new Error('n/a'); },
+      screenSpaceCameraController: { enableInputs: true },
+      pick() { return null; },
+      requestRender() {},
+    },
+  };
+  const layer = createLocalGeoJsonLayer({
+    id: 'entity-footprint',
+    url: '/api/entity-footprint/entities.geojsonl',
+    name: 'Reload Test',
+    color: '#7fd4ff',
+    reloadOnEnable: true,
+    analystRecord: (props, { id }) => ({ id, name: props?.name ?? null }),
+    overlayHost: { setVisible() {}, setEntries() {}, clearSource() {} },
+    projectToWindow: () => ({ x: 400, y: 300 }),
+    screenSpaceEventHandlerFactory: () => ({ setInputAction() {}, destroy() {} }),
+  });
+  try {
+    await layer.enable(viewer);
+    assert.equal(layer.getAnalystRecords()[0].name, 'Entity v1');
+
+    packVersion = 2;
+    layer.disable(viewer);
+    await layer.enable(viewer);
+    assert.equal(layer.getAnalystRecords()[0].name, 'Entity v2',
+      'the edited pack is re-fetched on the next enable');
+    assert.equal(dataSources.length, 1, 'the stale source was removed, not stacked');
+  } finally {
+    layer.destroy(viewer);
+    globalThis.fetch = originalFetch;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+});
