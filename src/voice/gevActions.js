@@ -183,6 +183,8 @@ const LAYER_ALIASES = new Map([
   ['tax audits', 'local-tax-disputes'],
   ['map cases', 'local-tax-disputes'],
   ['tax radar', 'local-tax-disputes'],
+  ['tax events', 'tax-events'],
+  ['tax news', 'tax-events'],
 ]);
 
 const CITY_ALIASES = new Map([
@@ -3278,6 +3280,7 @@ function layerTitle(layerId) {
   if (layerId === 'local-firms') return 'Active Fire';
   if (layerId === 'local-tp-radar') return 'TP Jurisdiction';
   if (layerId === 'local-tax-disputes') return 'Tax Disputes Jurisdiction';
+  if (layerId === 'tax-events') return 'Tax Event';
   return layerId || 'Entity';
 }
 
@@ -3383,7 +3386,7 @@ async function runAnalystQuery(viewer, dataManager, args = {}) {
   // model burned the turn on retries (field session 2026-08-21, 23:48).
   const items = result.items.map((r) => {
     const compact = { layerKey: r.layerKey, id: r.id };
-    for (const k of ['icao24', 'mmsi', 'registration', 'label', 'callsign', 'name', 'altitudeM', 'speedMps', 'speedKts', 'frp', 'magnitude', 'shipType', 'destination', 'operator', 'routeOrigin', 'routeDestination', 'aircraftClass', 'military', 'onGround', 'distanceKm', 'confidence', 'place', 'iso2', 'auditIntensity', 'mapInventoryTp', 'mapAvgMonthsTp', 'treatyCount', 'whtDividendPct', 'whtRoyaltyPct', 'cbcrThresholdEur', 'cbcrRequired', 'apa', 'tpDeadline', 'citRate']) {
+    for (const k of ['icao24', 'mmsi', 'registration', 'label', 'callsign', 'name', 'altitudeM', 'speedMps', 'speedKts', 'frp', 'magnitude', 'shipType', 'destination', 'operator', 'routeOrigin', 'routeDestination', 'aircraftClass', 'military', 'onGround', 'distanceKm', 'confidence', 'place', 'iso2', 'auditIntensity', 'mapInventoryTp', 'mapAvgMonthsTp', 'treatyCount', 'whtDividendPct', 'whtRoyaltyPct', 'cbcrThresholdEur', 'cbcrRequired', 'apa', 'tpDeadline', 'citRate', 'articleCount', 'ageHours', 'latestTitle', 'pillarTwoStatus', 'daysToGirDeadline', 'citRateSource']) {
       if (r[k] !== null && r[k] !== undefined) compact[k] = r[k];
     }
     return compact;

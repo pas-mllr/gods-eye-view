@@ -43,6 +43,11 @@ export const ANALYST_LAYERS = {
     text: ['name', 'iso2', 'auditIntensity', 'auditFocus', 'mapStatsSource'],
     flags: ['arbitrationAvailable', 'icapMember', 'mliSigned', 'participationExemption'],
   },
+  'tax-events': {
+    numeric: ['articleCount', 'ageHours'],
+    text: ['name', 'iso2', 'latestTitle'],
+    flags: [],
+  },
 };
 
 const EARTH_R_KM = 6371;

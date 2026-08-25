@@ -669,10 +669,10 @@ test('the voice TOOL SCHEMA is byte-identical to main — the mission mapping is
   // show_data_layers_menu / analyst_query plus their field docs), not a
   // first-run shortcut. The first-run missions themselves still ride existing
   // tools — the TAX RADAR tile added no tool either.
-  assert.equal(block.length, 31786, 'tool schema byte length drifted from the frozen baseline');
+  assert.equal(block.length, 32050, 'tool schema byte length drifted from the frozen baseline');
   assert.equal(
     crypto.createHash('sha256').update(block).digest('hex'),
-    '2e4fd555d00f8df05a433c4be3f76be552df093ca56e38670d97aaec69a614a9',
+    'aa951b41f9390ea5a73e43acfc2e2efab0fb850b680085c0e8761fa0c9e2da35',
     'the first-run missions must ride EXISTING tools: no schema edit, no cache bust',
   );
 

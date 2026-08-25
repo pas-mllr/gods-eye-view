@@ -52,6 +52,8 @@ import {
 } from './src/data/regionalBrief.js';
 import { normalizeAdsbLolPointResponse } from './src/data/adsbLolFallback.js';
 import { normalizeOecdTaxPayload } from './src/data/oecdSdmx.js';
+import { aggregateTaxEventPoints, normalizeTaxEventArticles } from './src/data/taxEventsFeed.js';
+import { buildJurisdictionIndex, indexByCountryName } from './src/data/taxJurisdictionIndex.js';
 import { createAisStreamAdapter, isRecognizedAisEnvelope } from './src/data/aisStreamAdapter.js';
 import { parseSilenceTimeoutEnv } from './src/data/aisWatchdog.js';
 import {
@@ -1855,6 +1857,119 @@ function oecdTaxProxy() {
 
   return {
     name: 'oecd-tax-proxy',
+    configureServer(server) {
+      install(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      install(server.middlewares);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tax events proxy (/api/tax-events)
+//
+// Live, geocoded tax news: GDELT DOC 2.0 artlist on a tax query, normalized
+// and aggregated server-side (src/data/taxEventsFeed.js) onto the bundled
+// jurisdiction anchors — the client never parses GDELT, and articles from
+// countries outside the 51-jurisdiction set are reported as unmatchedCount,
+// never silently dropped. GDELT DOC is chosen over the GEO API on purpose:
+// artlist carries seendate (the decay input) and plain fields; GEO returns
+// untrusted HTML blobs and no timestamps.
+
+export const TAX_EVENTS_CACHE_TTL_MS = 15 * 60_000;
+export const TAX_EVENTS_DEFAULT_QUERY =
+  '(tax OR "transfer pricing" OR "tax authority" OR OECD OR "Pillar Two" OR "tax audit" OR "tax dispute")';
+
+function taxEventsProxy() {
+  const ttlMs = TAX_EVENTS_CACHE_TTL_MS;
+  const maxResponseBytes = 4 * 1024 * 1024;
+  let cache = null;
+  const inFlight = new Map();
+  let jurisdictionNameIndex = null;
+
+  function nameIndex() {
+    if (jurisdictionNameIndex) return jurisdictionNameIndex;
+    const dir = path.join(__dirname, 'src', 'data', 'local_data', 'tax_advisory');
+    let tpText = '';
+    let disputesText = '';
+    try {
+      tpText = fs.readFileSync(path.join(dir, 'tp_radar.geojsonl'), 'utf8');
+      disputesText = fs.readFileSync(path.join(dir, 'tax_disputes.geojsonl'), 'utf8');
+    } catch (error) {
+      console.warn(`[tax-events-proxy] jurisdiction datasets unreadable: ${error?.message || error}`);
+    }
+    jurisdictionNameIndex = indexByCountryName(buildJurisdictionIndex(tpText, disputesText));
+    return jurisdictionNameIndex;
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=300' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const params = new URLSearchParams({
+      query: process.env.TAX_EVENTS_QUERY || TAX_EVENTS_DEFAULT_QUERY,
+      mode: 'artlist',
+      format: 'json',
+      maxrecords: '75',
+      sort: 'datedesc',
+      timespan: '72h',
+    });
+    const upstream = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?${params}`, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'GodsEyeView/0.1' },
+    });
+    const body = await readResponseTextCapped(upstream, maxResponseBytes);
+    if (!upstream.ok) throw new Error(`upstream HTTP ${upstream.status}`);
+    const articles = normalizeTaxEventArticles(JSON.parse(body));
+    const now = Date.now();
+    const { points, unmatchedCount } = aggregateTaxEventPoints(articles, nameIndex(), now);
+    const payload = {
+      retrievedAt: new Date(now).toISOString(),
+      points,
+      articleCount: articles.length,
+      unmatchedCount,
+    };
+    const fresh = { at: now, body: JSON.stringify(payload) };
+    cache = fresh;
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/tax-events', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      const now = Date.now();
+      if (cache && now - cache.at < ttlMs) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'tax-events', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) console.warn(`[tax-events-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(res, 503, JSON.stringify({ error: 'Tax events are temporarily unavailable' }), 'NONE');
+      }
+    });
+  }
+
+  return {
+    name: 'tax-events-proxy',
     configureServer(server) {
       install(server.middlewares);
     },
@@ -5299,7 +5414,7 @@ function openAiRealtimeProxy() {
             // GEV_REALTIME_TOOLS is deliberately untouched — deleting this one
             // string is the whole rollback.
             'NAMED VIEWS are shorthand for tool calls you already have — there is no "mode" tool for them. Treat ONLY these as the shorthand: "infrastructure mode" / "the infrastructure view" / "show me global infrastructure" means three set_layer_visibility calls (local-datacenters, local-dams, telegeography-submarine-cables) plus zoom_to_globe; "environmental mode" / "earth watch" / "active events", said as the name of a view, means set_layer_visibility for local-firms and earthquakes plus zoom_to_globe. Anything vaguer is NOT this shorthand — an open-ended question about the world or the news is an ordinary question: answer it, or use analyst_query over the layers already on. Never switch a whole view on to answer a question nobody asked to see. When you do run one, make every call before speaking, then give one confirmation naming the resulting state; if the fires layer comes back unavailable because no FIRMS key is configured, say so plainly — the earthquakes still loaded. "Live contacts" and "space missions" are NOT this pattern: they stay set_context_mode{mode:"contacts"} and set_context_mode{mode:"space-missions"}.',
-            '"Tax radar" / "the tax view" / "global tax view" means two set_layer_visibility calls (local-tp-radar, local-tax-disputes) plus zoom_to_globe. Questions about transfer pricing obligations, CbCR, master/local file, APAs, MAP caseloads, audit intensity, treaties, or withholding rates over those layers use analyst_query. Both are BUNDLED curated snapshots, not live feeds — if asked how current the data is, say it is a bundled snapshot with per-record as-of dates, not live.',
+            '"Tax radar" / "the tax view" / "global tax view" means three set_layer_visibility calls (local-tp-radar, local-tax-disputes, tax-events) plus zoom_to_globe. Questions about transfer pricing obligations, CbCR, master/local file, APAs, MAP caseloads, audit intensity, treaties, withholding rates, Pillar Two status, e-invoicing mandates, or GIR deadlines over those layers use analyst_query. The two jurisdiction layers are curated snapshots with an OECD live overlay where available — records carry citRateSource/mapStatsSource saying which figures are oecd-live vs bundled; report that provenance when asked how current a figure is. tax-events is LIVE tax news (GDELT), aggregated per jurisdiction with article counts and age.',
             'For visual filter requests, call set_visual_style with one of the allowed style IDs.',
             'Disambiguation table — basemap vs layer vs style: basemap switching requires an explicit stack name — "Bing aerial" means set_map_stack bing-aerial, "aerial with labels" means bing-labels, "OSM"/"road map" means osm, "Google 3D"/"photorealistic" means photoreal. Any mention of "satellite" or "satellites" ALWAYS means the satellites DATA LAYER via set_layer_visibility, never a basemap. "surveillance"/"night vision"/"thermal" are visual STYLES via set_visual_style.',
             'HUD requests ("hud on/off", "switch to operator/minimal/tactical layout") use set_hud. Detection requests ("detection on", "dense mode", "balanced mode", "sparse mode", "set density to 25", "use weighted allocation") use set_detection. Density snaps to 0/25/50/75/100 and derives Sparse/Balanced/Dense; panoptic is a legacy alias for Dense.',
@@ -5785,7 +5900,7 @@ const GEV_REALTIME_TOOLS = [
         layerId: {
           type: 'string',
           description:
-            'Common-name mapping for the non-obvious ids: space mission(s) → rocket-launches; fires/wildfires/active fires → local-firms (NASA FIRMS); ships/vessels/boats → ais-live-vessels; undersea/submarine cables → telegeography-submarine-cables; datacenters → local-datacenters; dams → local-dams; bikes/bike share → bikeshare; street traffic/congestion → traffic; traffic cameras → cctv; internet radio/stations → radio; transfer pricing/TP → local-tp-radar; tax disputes/tax audits/MAP cases → local-tax-disputes.',
+            'Common-name mapping for the non-obvious ids: space mission(s) → rocket-launches; fires/wildfires/active fires → local-firms (NASA FIRMS); ships/vessels/boats → ais-live-vessels; undersea/submarine cables → telegeography-submarine-cables; datacenters → local-datacenters; dams → local-dams; bikes/bike share → bikeshare; street traffic/congestion → traffic; traffic cameras → cctv; internet radio/stations → radio; transfer pricing/TP → local-tp-radar; tax disputes/tax audits/MAP cases → local-tax-disputes; tax news/tax events → tax-events (live GDELT).',
           enum: [
             'flights',
             'military',
@@ -5803,6 +5918,7 @@ const GEV_REALTIME_TOOLS = [
             'local-firms',
             'local-tp-radar',
             'local-tax-disputes',
+            'tax-events',
           ],
         },
         enabled: { type: 'boolean' },
@@ -5836,6 +5952,7 @@ const GEV_REALTIME_TOOLS = [
             'local-firms',
             'local-tp-radar',
             'local-tax-disputes',
+            'tax-events',
           ],
           description: 'Optional layer row to scroll into view and highlight.',
         },
@@ -6253,8 +6370,8 @@ const GEV_REALTIME_TOOLS = [
       properties: {
         layers: {
           type: 'array',
-          items: { type: 'string', enum: ['flights', 'military', 'ais-live-vessels', 'local-firms', 'earthquakes', 'local-tp-radar', 'local-tax-disputes'] },
-          description: 'Layers to query. fires/wildfires → local-firms; ships/vessels → ais-live-vessels; transfer pricing/TP obligations → local-tp-radar; tax disputes/audits/MAP/withholding/treaties → local-tax-disputes.',
+          items: { type: 'string', enum: ['flights', 'military', 'ais-live-vessels', 'local-firms', 'earthquakes', 'local-tp-radar', 'local-tax-disputes', 'tax-events'] },
+          description: 'Layers to query. fires/wildfires → local-firms; ships/vessels → ais-live-vessels; transfer pricing/TP obligations → local-tp-radar; tax disputes/audits/MAP/withholding/treaties → local-tax-disputes; live tax news pins → tax-events.',
         },
         scope: {
           type: 'object',
@@ -6269,7 +6386,7 @@ const GEV_REALTIME_TOOLS = [
         },
         filters: {
           type: 'array',
-          description: 'Attribute predicates, ANDed. ALTITUDE IS METERS (40,000 ft = 12192). Fields: altitudeM, speedMps, military, onGround, aircraftClass, callsign, operator, routeOrigin, routeDestination, originCountry (flights); speedKts, shipType, destination (ships); frp, confidence (fires); magnitude, depthKm, place (earthquakes); name, iso2, citRate, cbcrRequired, masterFileRequired, localFileRequired, apaBilateral, tpDeadline (local-tp-radar); auditIntensity, mapInventoryTp, mapAvgMonthsTp, treatyCount, whtDividendPct, whtInterestPct, whtRoyaltyPct, arbitrationAvailable, mliSigned, participationExemption (local-tax-disputes).',
+          description: 'Attribute predicates, ANDed. ALTITUDE IS METERS (40,000 ft = 12192). Fields: altitudeM, speedMps, military, onGround, aircraftClass, callsign, operator, routeOrigin, routeDestination, originCountry (flights); speedKts, shipType, destination (ships); frp, confidence (fires); magnitude, depthKm, place (earthquakes); name, iso2, citRate, cbcrRequired, masterFileRequired, localFileRequired, apaBilateral, tpDeadline, pillarTwoStatus, eInvoicingPhase, daysToGirDeadline, citRateSource (local-tp-radar); auditIntensity, mapInventoryTp, mapAvgMonthsTp, treatyCount, whtDividendPct, whtInterestPct, whtRoyaltyPct, arbitrationAvailable, mliSigned, participationExemption (local-tax-disputes); articleCount, ageHours, latestTitle (tax-events).',
           items: {
             type: 'object',
             additionalProperties: false,
@@ -7527,6 +7644,7 @@ export default defineConfig(({ mode }) => {
       firmsProxy(),
       rocketLaunchesProxy(),
       oecdTaxProxy(),
+      taxEventsProxy(),
       terrainHeightsProxy(),
       adsbdbProxy(),
       overpassProxy(),
