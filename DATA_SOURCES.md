@@ -67,6 +67,14 @@ Static datasets shipped in the repo for an out-of-the-box experience. **None are
 | **DataSF Analysis Neighborhoods** (41 SF neighborhood polygons) | `neighborhoods/` | **PDDL 1.0** (public domain) | ✅ (no restrictions) | "City & County of San Francisco — DataSF" (courtesy — not legally required) |
 | **Tax advisory — TP Radar** (51 jurisdictions) | `tax_advisory/` | Hand-curated summary of facts from OECD TP Country Profiles + public national law — no OECD database redistributed | ✅ (facts/figures summarized; cite OECD source publications) | "Curated from OECD TP Country Profiles © OECD; not tax advice" |
 | **Tax advisory — Tax Disputes & M&A** (51 jurisdictions) | `tax_advisory/` | Hand-curated summary of OECD MAP Statistics (rounded) + public treaty summaries — no OECD database redistributed | ✅ (facts/figures summarized; cite OECD source publications) | "Curated from OECD MAP Statistics © OECD; not tax advice" |
+| **Entity Footprint demo pack** (22 fictional entities, 16 fictional flows) | `../../config/entity_footprint.example.json` | Entirely fictional demo data authored for this repo (MIT) — real packs load via `ENTITY_FOOTPRINT_FILE` and are never committed | ✅ | "Fictional demo group — not a real business" |
+
+### Live tax feeds (proxied)
+
+| Feed | Proxy | Source | Terms |
+|------|-------|--------|-------|
+| CIT rates + MAP caseload overlay | `/api/oecd-tax` | [OECD Data Explorer SDMX API](https://data.oecd.org) | © OECD; keyless public API — cite OECD; not tax advice |
+| Tax events (geocoded tax news) | `/api/tax-events` | [GDELT DOC 2.0](https://www.gdeltproject.org/) | Free/open API; article links carry each publisher's own terms |
 
 ### ⚠️ TeleGeography is bundled but NonCommercial
 

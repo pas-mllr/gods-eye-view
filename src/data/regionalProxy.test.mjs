@@ -39,6 +39,7 @@ test('new data proxies install the same routes in dev and preview servers', () =
     'rocket-launches-proxy',
     'oecd-tax-proxy',
     'tax-events-proxy',
+    'entity-footprint-proxy',
     'military-installations-proxy',
     'regional-brief-proxy',
     'weather-effects-proxy',

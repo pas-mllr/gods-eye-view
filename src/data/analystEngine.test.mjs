@@ -254,3 +254,35 @@ test('analyst: withholding-rate threshold scan works with numeric fields', async
   });
   assert.deepEqual(r.items.map((i) => i.id).sort(), ['Germany', 'India']);
 });
+
+test('per-layer compact fields cover everything the old flat whitelist forwarded', async () => {
+  const { COMPACT_IDENTITY_FIELDS, compactFieldsForLayer, ANALYST_LAYERS } = await import('./analystEngine.js');
+  // The retired flat list (pre-refactor). Every entry must still reach the
+  // voice payload for the layer(s) whose records actually carry it.
+  const OLD_FLAT_LIST = [
+    'icao24', 'mmsi', 'registration', 'label', 'callsign', 'name', 'altitudeM', 'speedMps',
+    'speedKts', 'frp', 'magnitude', 'shipType', 'destination', 'operator', 'routeOrigin',
+    'routeDestination', 'aircraftClass', 'military', 'onGround', 'distanceKm', 'confidence',
+    'place', 'iso2', 'auditIntensity', 'mapInventoryTp', 'mapAvgMonthsTp', 'treatyCount',
+    'whtDividendPct', 'whtRoyaltyPct', 'cbcrThresholdEur', 'cbcrRequired', 'apa', 'tpDeadline',
+    'citRate', 'articleCount', 'ageHours', 'latestTitle', 'pillarTwoStatus', 'daysToGirDeadline',
+    'citRateSource',
+  ];
+  const identity = new Set(COMPACT_IDENTITY_FIELDS);
+  const declaredSomewhere = new Set();
+  for (const layerKey of Object.keys(ANALYST_LAYERS)) {
+    const schema = ANALYST_LAYERS[layerKey];
+    const fields = compactFieldsForLayer(layerKey);
+    for (const field of [...schema.numeric, ...schema.text, ...schema.flags]) {
+      declaredSomewhere.add(field);
+      assert.ok(fields.has(field), `${layerKey}: schema field ${field} reaches the compact payload`);
+    }
+    for (const field of identity) {
+      assert.ok(fields.has(field), `${layerKey}: identity field ${field} always rides along`);
+    }
+  }
+  for (const field of OLD_FLAT_LIST) {
+    assert.ok(identity.has(field) || declaredSomewhere.has(field),
+      `old whitelist field ${field} is still reachable via some layer schema`);
+  }
+});

@@ -123,6 +123,15 @@ export function localInfrastructureOverlayCopy(properties, layerId, nowMs = Date
     const audit = cleanLabel(props.auditIntensity);
     if (audit) parts.push(`audit ${audit}`);
     if (parts.length) details.push(clampCardLine(parts.join(' · ')));
+  } else if (layerId === 'entity-footprint') {
+    const line = [cleanLabel(props.role), cleanLabel(props.jurisdictionName) || cleanLabel(props.jurisdiction)]
+      .filter(Boolean).join(' · ');
+    if (line) details.push(clampCardLine(line));
+    // The PREDICTED prefix is the honesty contract for the risk overlay —
+    // this score is an editorial weighting, and it must never render bare.
+    if (Number.isFinite(props.riskScore) && props.riskBand) {
+      details.push(clampCardLine(`PREDICTED risk ${props.riskScore} · ${props.riskBand}`));
+    }
   }
 
   return { title, details };
@@ -972,6 +981,11 @@ function labelPriorityFromProperties(props, layerId, nowMs = Date.now()) {
     if (band === 'overdue' || band === 'imminent') score += 200;
     else if (band === 'upcoming') score += 80;
   }
+  if (layerId === 'entity-footprint') {
+    // Hot entities win label slots over quiet subsidiaries.
+    if (props.riskBand === 'very-high') score += 200;
+    else if (props.riskBand === 'high') score += 100;
+  }
   return score;
 }
 
@@ -1020,5 +1034,6 @@ function layerTitle(layerId) {
   if (layerId === 'local-dams') return 'Dam';
   if (layerId === 'local-tp-radar') return 'TP Jurisdiction';
   if (layerId === 'local-tax-disputes') return 'Tax Disputes Jurisdiction';
+  if (layerId === 'entity-footprint') return 'Group Entity';
   return 'Feature';
 }

@@ -1606,8 +1606,11 @@ its criteria cannot be silently ignored.
 | Dams ▰ | OpenInfraMap/OSM extract (bundled) | `src/data/localLayers.js` | — | static |
 | Submarine Cables ◠ | TeleGeography public map (bundled) | `src/data/telegeographySubmarineCables.js` | — | static |
 | FIRMS Active Fires ▲ | NASA FIRMS live (VIIRS ×3 NRT, trailing 24h) | `src/data/firmsHeatmap.js` | `/api/firms` (`FIRMS_MAP_KEY`) | 10 min (proxy TTL 30 min) |
-| TP Radar ⊞ | Curated OECD TP country-profile summaries (bundled snapshot) | `src/data/taxLayers.js` | — | static |
-| Tax Disputes & M&A ⚖ | Curated OECD MAP statistics + public treaty summaries (bundled snapshot) | `src/data/taxLayers.js` | — | static |
+| TP Radar ⊞ | Curated OECD summaries (bundled) + OECD SDMX live CIT overlay | `src/data/taxLayers.js` | `/api/oecd-tax` | static + 6h live merge |
+| Tax Disputes & M&A ⚖ | Curated OECD MAP statistics (bundled) + OECD SDMX live MAP overlay | `src/data/taxLayers.js` | `/api/oecd-tax` | static + 6h live merge |
+| Tax Events ◍ | GDELT DOC 2.0 tax news, aggregated per jurisdiction | `src/data/taxEventsLayer.js` | `/api/tax-events` | 10 min |
+| Entity Footprint ⬢ | Env-pointed group pack (FICTIONAL demo by default), risk-scored | `src/data/entityFootprintLayer.js` | `/api/entity-footprint` | on enable |
+| Intercompany Flows ⇌ | Same pack's flows as lifted great-circle arcs | `src/data/taxFlowsLayer.js` | `/api/entity-footprint` | on enable |
 
 `src/data/militaryAwareness.js` remains registered internally as the Contacts
 coordinator, but it is not a user-visible Data Layers entry. Its visible entry
@@ -2280,6 +2283,53 @@ silently demoting every later lookup for the session.
 - Regression surface: `src/data/taxLayers.test.mjs`, plus tax coverage in
   `src/data/analystEngine.test.mjs`, `src/data/localGeojson.test.mjs`,
   `src/data/regionalBrief.test.mjs`, and `src/firstRunExperience.test.mjs`.
+
+### Tax Radar live upgrade (August 2026)
+
+- **Dated policy states + deadline urgency.** TP Radar records carry
+  `pillarTwoStatus`, `safeHarbourUntil`, `eInvoicingPhase`/`eInvoicingFrom`,
+  and `girNextDeadline`; the pure `src/data/taxPolicy.js` turns them into
+  nearest-obligation card lines and an urgency rendering (overdue `#ff4d4d` /
+  imminent ≤90d `#ff8c42` / upcoming ≤365d `#ffd166` stems) via the local
+  factory's new opt-in `markerColor` option (resolved once per load; imminent
+  deadlines also win ambient-label priority).
+- **OECD live overlay.** `/api/oecd-tax` (launches-proxy pattern; 24h TTL,
+  disk cache, serve-stale; dataflow ids env-tunable) feeds the factory's new
+  `liveUpdate`/`applyLive`/`refreshInterval` hooks: patches merge into record
+  properties in place (reaching cards and analyst snapshots), `update()` never
+  fails an enable, the chip flips to `OECD SDMX · LIVE + BUNDLED …` only after
+  a successful merge, a lapsed overlay is STALE, and merged figures carry
+  `citRateSource`/`mapStatsSource` provenance.
+- **Live tax-events layer** (`tax-events`, token `k`, 10-min poll).
+  `/api/tax-events` polls GDELT DOC 2.0 (artlist, 72h window; DOC over GEO on
+  purpose — timestamps, no untrusted HTML), normalizes with the regional-brief
+  safety discipline, and aggregates per jurisdiction onto the bundled anchors
+  (pins at −0.35° lon, the mirror side from the disputes stems; unmatched
+  countries are counted, never dropped silently). Static per tick: size from
+  volume, alpha from age. Fails soft: previous pins survive a failed poll
+  (DEGRADED with data, UNAVAILABLE without).
+- **Entity footprint + intercompany flows** (`entity-footprint` `n`,
+  `tax-flows` `v`). `/api/entity-footprint` applies the CCTV source-pack
+  pattern to a corporate group (`ENTITY_FOOTPRINT_FILE`/`_JSON`; committed
+  default is the clearly FICTIONAL Aurora demo). Normalization, jurisdiction
+  enrichment (via the pure `taxJurisdictionIndex`, never another layer's
+  runtime state), and PREDICTED risk scoring happen server-side; bad records
+  are repaired loudly (warnings in payload and log). The footprint layer IS
+  the local factory pointed at the proxy's GeoJSONL route (risk-band stem
+  colors); flows are lifted great-circle arcs (EllipsoidGeodesic + sin(πt),
+  apex clamped 30–800 km, `ArcType.NONE`) with contextStore selection at the
+  apex.
+- **PREDICTED risk contract.** `src/data/entityRisk.js` is deterministic and
+  inspectable (`explainRisk()` exposes components); every rendered surface and
+  the voice persona prefix the score PREDICTED — it must never read as fact.
+- **Voice compact payload is now schema-derived.** `compactFieldsForLayer`
+  (analystEngine.js) replaces the flat whitelist in `runAnalystQuery`:
+  identity fields ∪ the layer's `ANALYST_LAYERS` entry, memoized; a coverage
+  test pins that everything the old list forwarded still flows.
+- Registry count 18 → 21; the GEV_REALTIME_TOOLS pin was refrozen for the
+  deliberate enum growth. Regression surfaces: `taxPolicy`, `oecdSdmx`,
+  `taxEventsFeed`, `taxEventsLayer`, `entityRisk`, `entityFootprintPack`,
+  `footprintRecords`, `taxFlowsLayer` test suites.
 
 ### Not Currently in Runtime
 

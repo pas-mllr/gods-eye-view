@@ -3,6 +3,8 @@ import { createFirmsHeatmapLayer } from './firmsHeatmap.js';
 import submarineCablesLayer from './telegeographySubmarineCables.js';
 import { tpRadarLayer, taxDisputesLayer } from './taxLayers.js';
 import taxEventsLayer from './taxEventsLayer.js';
+import entityFootprintLayer from './entityFootprintLayer.js';
+import taxFlowsLayer from './taxFlowsLayer.js';
 
 // Use Vite's ?url import to properly resolve these assets in dev and build
 import datacentersUrl from './local_data/datacenters/datacenters.geojsonl?url';
@@ -53,8 +55,10 @@ export default [
   fires,
   tpRadarLayer,
   taxDisputesLayer,
-  // Live layer, not bundled — rides this array for zero-friction registration
-  // exactly like local-firms (the array is "layers main.js loops", not
-  // "bundled data"; see the local-firms note above).
+  // Live/config layers, not bundled — they ride this array for zero-friction
+  // registration exactly like local-firms (the array is "layers main.js
+  // loops", not "bundled data"; see the local-firms note above).
   taxEventsLayer,
+  entityFootprintLayer,
+  taxFlowsLayer,
 ];

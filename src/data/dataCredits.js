@@ -183,6 +183,20 @@ export const DATA_CREDITS = [
       '<a href="https://www.oecd.org/tax/dispute/mutual-agreement-procedure-statistics.htm" target="_blank" rel="noopener">OECD MAP Statistics</a> ' +
       '&amp; public national law — © OECD source publications; not tax advice',
   },
+  {
+    key: 'oecd-sdmx-live',
+    html:
+      'Live tax overlay (CIT rates, MAP caseloads): ' +
+      '<a href="https://data.oecd.org" target="_blank" rel="noopener">OECD Data Explorer API</a> ' +
+      '— © OECD; not tax advice',
+  },
+  {
+    key: 'tax-events-gdelt',
+    html:
+      'Tax events: ' +
+      '<a href="https://www.gdeltproject.org/about.html" target="_blank" rel="noopener">GDELT Project</a> ' +
+      '(location-matched article links; publisher terms apply)',
+  },
 ];
 
 /**

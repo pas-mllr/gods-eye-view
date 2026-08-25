@@ -14,8 +14,19 @@ professional reliance.
 
 | Layer | Id | Share token | What it shows |
 |-------|----|-------------|---------------|
-| TP Radar ⊞ | `local-tp-radar` | `p` | Transfer-pricing documentation obligations per jurisdiction: master file / local file / CbCR requirements and the EUR 750m threshold, filing deadlines, penalty exposure, APA availability (unilateral/bilateral), MAP availability, OECD alignment, headline CIT rate |
+| TP Radar ⊞ | `local-tp-radar` | `p` | Transfer-pricing documentation obligations per jurisdiction: master file / local file / CbCR requirements and the EUR 750m threshold, filing deadlines, penalty exposure, APA availability (unilateral/bilateral), MAP availability, OECD alignment, headline CIT rate — plus dated policy states (Pillar Two status, safe-harbour end, e-invoicing mandate phase and go-live, next GIR deadline) rendered as deadline urgency (overdue red / imminent orange / upcoming yellow stems) |
 | Tax Disputes & M&A ⚖ | `local-tax-disputes` | `j` | Dispute and structuring posture per jurisdiction: MAP TP caseload approximations (inventory, new cases, average months), an editorial audit-intensity rating with typical audit focus, treaty network size, MLI signature, arbitration availability, domestic (non-treaty) withholding rates on dividends/interest/royalties, participation exemption |
+| Tax Events ◍ | `tax-events` | `k` | **Live** geocoded tax news: GDELT DOC 2.0 polled every 10 minutes on a tax query, aggregated per jurisdiction (pin size = article volume, opacity = freshness over a 72h window), clickable to the underlying articles |
+| Entity Footprint ⬢ | `entity-footprint` | `n` | The **configured group's** legal entities (env-pointed pack; the committed default is a clearly FICTIONAL demo group), jurisdiction-enriched and colored by **PREDICTED** audit-risk band |
+| Intercompany Flows ⇌ | `tax-flows` | `v` | The same pack's intercompany flows as lifted great-circle arcs, colored by type (goods, royalty, service fee, financing, dividend, cost share), clickable for pricing method and value |
+
+**Live overlay:** both jurisdiction layers merge live figures from the OECD
+SDMX API through `/api/oecd-tax` (six-hourly): statutory CIT rates onto TP
+Radar, MAP TP caseloads onto Disputes. Merged records carry provenance
+(`citRateSource`/`mapStatsSource`: `oecd-live` vs `bundled`), the layer chip
+flips to `OECD SDMX · LIVE + BUNDLED …` only after a successful merge, and a
+lapsed overlay reports STALE while the intact bundled snapshot keeps
+working. The dataflow ids are env-tunable (`OECD_*` in `.env.example`).
 
 Both are **BUNDLED snapshots**, not live feeds — the layer `source` strings say
 so, and the provenance README
@@ -81,6 +92,62 @@ clickable when the layers run together.
 | `whtDividendPct`, `whtInterestPct`, `whtRoyaltyPct` | number | Headline domestic (non-treaty) withholding rates (%) |
 | `participationExemption` | flag | Domestic participation exemption available |
 
+## The entity-footprint pack
+
+The Entity Footprint and Intercompany Flows layers read one JSON pack through
+`/api/entity-footprint` (the CCTV source-pack pattern: operator-trusted,
+env-pointed, never fetched from client-supplied URLs). Ship your own with
+`ENTITY_FOOTPRINT_FILE=/path/to/pack.json` (or inline via
+`ENTITY_FOOTPRINT_JSON`); **never commit a real group's pack**. The committed
+default, `config/entity_footprint.example.json`, is the entirely fictional
+"Aurora Consumer Group" so the demo works out of the box.
+
+```jsonc
+{
+  "disclaimer": "…", "group": "…", "asOf": "YYYY-MM",
+  "entities": [{
+    "id": "unique-id",                  // required
+    "name": "Legal name",
+    "lei": "20-char LEI or null",       // validated /^[A-Z0-9]{18}[0-9]{2}$/
+    "jurisdiction": "DE",               // iso2; joins the radar datasets
+    "lat": 50.1, "lon": 8.7,            // required anchor
+    "role": "parent|holding|ip-owner|principal|distributor|manufacturer|finance|shared-services|rnd|other",
+    "parentId": "id or null",           // dangling/cyclic links repaired loudly
+    "ipOwner": false, "financing": false,
+    "headcount": 100, "functionsNote": "…"
+  }],
+  "flows": [{
+    "id": "unique-id", "from": "entity-id", "to": "entity-id",
+    "type": "royalty|service-fee|goods|financing|dividend|cost-share|other",
+    "annualValueEur": 1000000, "pricingMethod": "…", "note": "…"
+    // direction = delivery of the goods / service / licence / funds
+  }]
+}
+```
+
+The proxy normalizes and validates server-side (bad records are dropped
+**with warnings in the payload and server log**, never silently), joins each
+entity to its jurisdiction's radar attributes, and stamps the risk score.
+
+## PREDICTED audit risk
+
+`src/data/entityRisk.js` — deterministic, inspectable, and labeled. This is
+an **editorial weighting**, not a statistical model, and every surface that
+renders it says PREDICTED:
+
+```
+riskScore = clamp(round(0.35·audit + 0.20·map + 0.20·safeHarbour + 0.25·role), 0, 100)
+  audit        low 10 · moderate 40 · high 70 · very-high 95 · unknown 35
+  map          min(100, mapAvgMonthsTp × 2) · unknown 30
+  safeHarbour  expired 80 · ≤180d 65 · ≤365d 45 · >365d 20 · non-GloBE 50
+  role         20 base · +30 ipOwner · +25 financing · +15 principal/ip-owner · cap 100
+bands: <25 low · <50 moderate · <75 high · ≥75 very-high
+```
+
+`explainRisk()` returns the four component scores so a reviewer can see why
+an entity scored what it did. Voice queries can filter and sort on
+`riskScore`/`riskBand` — the agent is instructed to always call it predicted.
+
 ## How it is wired (for extension)
 
 The tax layers ride the repo's standard bundled-layer seam end to end:
@@ -113,17 +180,20 @@ set `asOf`, and update the counts in the dataset README and
 
 Follow the seven-step wiring above with a new dataset file, a new
 `createLocalGeoJsonLayer` call in `taxLayers.js`, a fresh
-`LAYER_STATE_REGISTRY` token, and an `ANALYST_LAYERS` entry. Natural
-candidates for later iterations:
+`LAYER_STATE_REGISTRY` token, and an `ANALYST_LAYERS` entry. Landed since
+the first iteration: Pillar Two + e-invoicing state machines (on TP Radar),
+the OECD live overlay, the live tax-events layer, the entity-footprint
+source pack, intercompany flow arcs, and the PREDICTED risk overlay.
+Natural candidates for the next ones:
 
-- **Indirect tax**: standard VAT/GST rate, e-invoicing mandate status and
-  go-live dates, digital services taxes.
-- **Pillar Two**: IIR/UTPR/QDMTT status and effective dates per jurisdiction.
-- **Deadline calendar**: per-entity filing deadlines for a configured group
-  footprint (would suit a CCTV-style env-pointed source pack instead of a
-  committed dataset, since footprints are company-specific).
-- **Live sources**: a licensed feed would ride the same proxy-hardening
-  pattern as the existing `/api/*` middlewares in `vite.config.js`.
+- **Indirect tax depth**: standard VAT/GST rates and digital services taxes
+  as first-class fields (the e-invoicing state machine already landed).
+- **Public CbCR peer layer**: EU registers + ATO publications become a
+  scrapable per-country corpus from end-2026.
+- **A GloBE scenario engine**: what-if top-up tax per jurisdiction over the
+  footprint pack, built on the OECD GIR XML schema.
+- **Licensed live feeds**: any commercial tax feed rides the same
+  proxy-hardening pattern as the existing `/api/*` middlewares.
 
 ## Honesty rules for refreshes
 

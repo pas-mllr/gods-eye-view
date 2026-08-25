@@ -48,7 +48,50 @@ export const ANALYST_LAYERS = {
     text: ['name', 'iso2', 'latestTitle'],
     flags: [],
   },
+  'entity-footprint': {
+    numeric: ['riskScore', 'citRate', 'headcount', 'daysToSafeHarbourEnd', 'mapAvgMonthsTp'],
+    text: ['name', 'iso2', 'role', 'riskBand', 'pillarTwoStatus', 'auditIntensity'],
+    flags: ['ipOwner', 'financing'],
+  },
+  'tax-flows': {
+    numeric: ['annualValueEur'],
+    text: ['name', 'flowType', 'fromEntity', 'toEntity', 'fromIso2', 'toIso2', 'pricingMethod'],
+    flags: ['crossBorder'],
+  },
 };
+
+/**
+ * Identity/routing fields every compact voice-payload item may carry
+ * regardless of layer: `id` is a display label, so the stable lookup keys
+ * (icao24/mmsi/registration) must ride along for track_entity, and
+ * distanceKm is stamped by nearest-first sorts.
+ */
+export const COMPACT_IDENTITY_FIELDS = Object.freeze([
+  'icao24', 'mmsi', 'registration', 'label', 'callsign', 'distanceKm',
+]);
+
+const _compactFieldsByLayer = new Map();
+
+/**
+ * The compact voice-payload field set for one layer: identity fields plus
+ * everything the layer's ANALYST_LAYERS schema declares. Replaces the old
+ * flat global whitelist so new layers' fields ride along automatically
+ * instead of growing one unstructured list. Memoized per layer key.
+ * @param {string} layerKey
+ * @returns {Set<string>}
+ */
+export function compactFieldsForLayer(layerKey) {
+  let fields = _compactFieldsByLayer.get(layerKey);
+  if (!fields) {
+    fields = new Set(COMPACT_IDENTITY_FIELDS);
+    const schema = ANALYST_LAYERS[layerKey];
+    if (schema) {
+      for (const field of [...schema.numeric, ...schema.text, ...schema.flags]) fields.add(field);
+    }
+    _compactFieldsByLayer.set(layerKey, fields);
+  }
+  return fields;
+}
 
 const EARTH_R_KM = 6371;
 
