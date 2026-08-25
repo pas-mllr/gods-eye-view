@@ -30,6 +30,11 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Changed
 
+- The README is repositioned around the Global Tax Radar edition — the tax
+  advisory layers, use cases, and voice queries lead, with the OSINT console
+  summarized beneath. The original upstream README is preserved verbatim at
+  `docs/UPSTREAM-README.md` (links adjusted for its folder) and remains the
+  full reference for the console's features, field missions, and key matrix.
 - First-run presentation now opens with Detection `DENSE` at 75%, `ELASTIC`
   allocation, Fade 7%, Outside 1%, scope feather 11%, and aircraft 3D models in
   `PROXIMITY`. Stored state and share links still override these baselines.
