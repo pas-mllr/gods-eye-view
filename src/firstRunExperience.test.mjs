@@ -395,14 +395,15 @@ function missionSpy({ contextOk = true, layerResult = () => true, globe = async 
   };
 }
 
-test('the menu is the four owner-ordered missions', () => {
+test('the menu is the five owner-ordered missions', () => {
   // INFRASTRUCTURE was removed after the field tested it: enabling all
   // three bundled layers at once put ~5,700 entities on a full-earth view and
   // tanked the frame rate. The layers stay reachable by hand and by voice; what
   // went is the one-click globe-scale dump. Restoring the tile needs the
-  // globe-LOD declutter first.
+  // globe-LOD declutter first. TAX RADAR does not reopen that wound: its two
+  // bundled snapshots total ~100 point entities.
   assert.deepEqual(Object.keys(FIRST_RUN_MISSIONS), [
-    'contacts', 'space-missions', 'environmental', 'explore',
+    'contacts', 'space-missions', 'environmental', 'tax-radar', 'explore',
   ]);
   assert.equal(FIRST_RUN_MISSIONS.infrastructure, undefined,
     'the infrastructure mission must be gone, not dormant');
@@ -426,6 +427,16 @@ test('Environmental enables BOTH its feeds and pulls out to the globe', async ()
   assert.equal(outcome.ok, true);
   assert.deepEqual(spy.calls.layerIds, ['earthquakes', 'local-firms']);
   assert.equal(spy.calls.globeFlights, 1);
+});
+
+test('Tax Radar enables both bundled tax layers and pulls out to the globe', async () => {
+  const spy = missionSpy();
+  const outcome = await runFirstRunChoice('tax-radar', spy.deps);
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(spy.calls.layerIds, ['local-tp-radar', 'local-tax-disputes']);
+  assert.equal(spy.calls.globeFlights, 1);
+  // Keyless-by-nature bundled snapshots: no Context mode, no keyed feed.
+  assert.deepEqual(spy.calls.contextModes, []);
 });
 
 test('the tile is the FULLY CONFIGURED experience: quakes and fires together', () => {
@@ -550,7 +561,7 @@ test('markup, startup ordering and accessibility remain pinned', () => {
   const css = fs.readFileSync(new URL('../style.css', import.meta.url), 'utf8');
 
   assert.match(html, /id="first-run-launcher" role="dialog"[^>]*aria-labelledby="first-run-title"[^>]*hidden/);
-  assert.equal((html.match(/data-first-run-choice=/g) || []).length, 4);
+  assert.equal((html.match(/data-first-run-choice=/g) || []).length, 5);
   assert.match(html, /data-first-run-status[^>]*role="status"[^>]*aria-live="polite"/);
   assert.match(html, /<input type="checkbox" data-first-run-suppress \/>/);
   assert.match(html, /<strong data-first-run-environmental-title>/);
@@ -573,7 +584,7 @@ test('markup, startup ordering and accessibility remain pinned', () => {
 
   // Menu order is the owner's, read straight off the markup.
   const order = [...html.matchAll(/data-first-run-choice="([a-z-]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(order, ['contacts', 'space-missions', 'environmental', 'explore']);
+  assert.deepEqual(order, ['contacts', 'space-missions', 'environmental', 'tax-radar', 'explore']);
   assert.doesNotMatch(html, /data-first-run-choice="infrastructure"/,
     'the removed tile must leave no markup behind');
 
@@ -653,10 +664,15 @@ test('the voice TOOL SCHEMA is byte-identical to main — the mission mapping is
   const end = src.indexOf('\n];\n', start);
   const block = src.slice(start, end + 4);
 
-  assert.equal(block.length, 31104, 'tool schema byte length drifted from the frozen baseline');
+  // Baseline refrozen 2026-08 for the Tax Advisory Radar: the tax layers are a
+  // REAL schema change (two new enum values on set_layer_visibility /
+  // show_data_layers_menu / analyst_query plus their field docs), not a
+  // first-run shortcut. The first-run missions themselves still ride existing
+  // tools — the TAX RADAR tile added no tool either.
+  assert.equal(block.length, 31786, 'tool schema byte length drifted from the frozen baseline');
   assert.equal(
     crypto.createHash('sha256').update(block).digest('hex'),
-    '3ace199727934e851902e4899c423d549d34d3f53469dcb56f07fc070d3f9d66',
+    '2e4fd555d00f8df05a433c4be3f76be552df093ca56e38670d97aaec69a614a9',
     'the first-run missions must ride EXISTING tools: no schema edit, no cache bust',
   );
 

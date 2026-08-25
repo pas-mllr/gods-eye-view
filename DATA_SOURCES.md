@@ -65,6 +65,8 @@ Static datasets shipped in the repo for an out-of-the-box experience. **None are
 | **TeleGeography Submarine Cable Map** (712 cables + 1,917 landing points) | `telegeography_submarine_cables/` | **CC BY-NC-SA 3.0** | ❌ **NonCommercial — remove for commercial use** | "© TeleGeography — submarinecablemap.com" |
 | **Natural Earth physical regions** (1,046 land + 292 marine named polygons) | `natural_earth/` | **Public domain** | ✅ (no restrictions) | "Made with Natural Earth" (courtesy credit — not legally required) |
 | **DataSF Analysis Neighborhoods** (41 SF neighborhood polygons) | `neighborhoods/` | **PDDL 1.0** (public domain) | ✅ (no restrictions) | "City & County of San Francisco — DataSF" (courtesy — not legally required) |
+| **Tax advisory — TP Radar** (51 jurisdictions) | `tax_advisory/` | Hand-curated summary of facts from OECD TP Country Profiles + public national law — no OECD database redistributed | ✅ (facts/figures summarized; cite OECD source publications) | "Curated from OECD TP Country Profiles © OECD; not tax advice" |
+| **Tax advisory — Tax Disputes & M&A** (51 jurisdictions) | `tax_advisory/` | Hand-curated summary of OECD MAP Statistics (rounded) + public treaty summaries — no OECD database redistributed | ✅ (facts/figures summarized; cite OECD source publications) | "Curated from OECD MAP Statistics © OECD; not tax advice" |
 
 ### ⚠️ TeleGeography is bundled but NonCommercial
 

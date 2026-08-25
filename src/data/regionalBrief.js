@@ -121,10 +121,40 @@ export function regionalDistanceM(from, to) {
   return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/**
+ * Topic register: layers that want the regional news slanted toward their
+ * domain register here on enable and deregister on disable. Module-level on
+ * purpose — the cockpit consumer calls fetchRegionalBrief without knowing
+ * which layers are up, and this keeps the wiring out of ui.js entirely.
+ * Currently the only topic is 'tax' (the server whitelists it).
+ */
+const _topicSources = new Map();
+
+/**
+ * Register or clear one layer's news-topic interest.
+ * @param {string} layerId Registering layer id.
+ * @param {boolean} active true while the layer is enabled.
+ * @param {string} [topic='tax'] Topic the layer wants.
+ * @returns {void}
+ */
+export function setRegionalBriefTopicSource(layerId, active, topic = 'tax') {
+  if (!layerId) return;
+  if (active) _topicSources.set(layerId, topic);
+  else _topicSources.delete(layerId);
+}
+
+/** @returns {string|null} The active news topic, or null for the plain brief. */
+export function activeRegionalBriefTopic() {
+  for (const topic of _topicSources.values()) return topic;
+  return null;
+}
+
 /** Fetch a bounded regional brief through the same-origin dev/preview proxy. */
 export async function fetchRegionalBrief(latitude, longitude, { signal } = {}) {
   if (![latitude, longitude].every(Number.isFinite)) throw new Error('Valid coordinates are required');
   const params = new URLSearchParams({ latitude: latitude.toFixed(5), longitude: longitude.toFixed(5) });
+  const topic = activeRegionalBriefTopic();
+  if (topic) params.set('topic', topic);
   const response = await fetch(`/api/regional-brief?${params}`, { signal });
   if (!response.ok) throw new Error(`Regional brief unavailable (${response.status})`);
   return response.json();

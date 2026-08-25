@@ -61,3 +61,39 @@ test('regional distance handles nearby movement and missing positions', () => {
   assert.ok(distance > 11000 && distance < 11200);
   assert.equal(regionalDistanceM(null, null), Infinity);
 });
+
+test('the brief carries topic=tax exactly while a tax layer is registered', async () => {
+  const { fetchRegionalBrief, setRegionalBriefTopicSource, activeRegionalBriefTopic } =
+    await import('./regionalBrief.js');
+  const originalFetch = globalThis.fetch;
+  const requested = [];
+  globalThis.fetch = async (url) => {
+    requested.push(String(url));
+    return { ok: true, json: async () => ({ status: 'ready' }) };
+  };
+  try {
+    assert.equal(activeRegionalBriefTopic(), null, 'no topic before any layer registers');
+    await fetchRegionalBrief(30.5, -97.5);
+    assert.ok(!requested[0].includes('topic='), 'plain brief carries no topic param');
+
+    setRegionalBriefTopicSource('local-tp-radar', true);
+    setRegionalBriefTopicSource('local-tax-disputes', true);
+    assert.equal(activeRegionalBriefTopic(), 'tax');
+    await fetchRegionalBrief(30.5, -97.5);
+    assert.ok(requested[1].includes('topic=tax'), 'tax brief carries topic=tax');
+
+    // One tax layer off, the other still on → still tax-flavored.
+    setRegionalBriefTopicSource('local-tp-radar', false);
+    assert.equal(activeRegionalBriefTopic(), 'tax');
+
+    // Both off → back to the plain brief, with nothing left behind.
+    setRegionalBriefTopicSource('local-tax-disputes', false);
+    assert.equal(activeRegionalBriefTopic(), null);
+    await fetchRegionalBrief(30.5, -97.5);
+    assert.ok(!requested[2].includes('topic='), 'topic clears with the last tax layer');
+  } finally {
+    globalThis.fetch = originalFetch;
+    setRegionalBriefTopicSource('local-tp-radar', false);
+    setRegionalBriefTopicSource('local-tax-disputes', false);
+  }
+});

@@ -1606,6 +1606,8 @@ its criteria cannot be silently ignored.
 | Dams ▰ | OpenInfraMap/OSM extract (bundled) | `src/data/localLayers.js` | — | static |
 | Submarine Cables ◠ | TeleGeography public map (bundled) | `src/data/telegeographySubmarineCables.js` | — | static |
 | FIRMS Active Fires ▲ | NASA FIRMS live (VIIRS ×3 NRT, trailing 24h) | `src/data/firmsHeatmap.js` | `/api/firms` (`FIRMS_MAP_KEY`) | 10 min (proxy TTL 30 min) |
+| TP Radar ⊞ | Curated OECD TP country-profile summaries (bundled snapshot) | `src/data/taxLayers.js` | — | static |
+| Tax Disputes & M&A ⚖ | Curated OECD MAP statistics + public treaty summaries (bundled snapshot) | `src/data/taxLayers.js` | — | static |
 
 `src/data/militaryAwareness.js` remains registered internally as the Contacts
 coordinator, but it is not a user-visible Data Layers entry. Its visible entry
@@ -2243,6 +2245,41 @@ silently demoting every later lookup for the session.
   pathological field and 5,200-object normal field without relaxing budgets.
 - `src/data/detectionDraw.js` performs the batched, DPI-crisp canvas drawing for tier-colored labels, corner brackets, callouts, and distance-scaled tracked boxes. Unit tests cover label measurement and draw geometry.
 - `src/data/trackedReadout.js` publishes a protected shared-host callout above tracked aircraft and satellites or selected mapped installations. It reads only each layer's cached display position—never a fresh entity position evaluation—preventing readout jitter against the rendered target. AIS selection remains in the vessel source's protected card path.
+
+### Tax Advisory Radar (August 2026)
+
+- Two bundled jurisdiction layers built on `createLocalGeoJsonLayer`, defined in
+  `src/data/taxLayers.js` with data + provenance README under
+  `src/data/local_data/tax_advisory/`: **TP Radar** (`local-tp-radar`, token
+  `p` — transfer-pricing documentation obligations, CbCR/master/local-file
+  requirements, APA availability, headline CIT rates) and **Tax Disputes & M&A**
+  (`local-tax-disputes`, token `j` — MAP caseload approximations, an editorial
+  audit-intensity rating, treaty counts, domestic withholding rates,
+  MLI/arbitration/participation-exemption flags). 51 jurisdictions each, one
+  Point per jurisdiction; the disputes anchors are offset +0.35° longitude so
+  both stems stay clickable together. Sources and honesty caveats live in the
+  dataset README; both layers surface `BUNDLED` in their source strings.
+- The local-layer factory gained an opt-in `analystRecord` mapper option; layers
+  that pass it (only the two tax layers today) expose `getAnalystRecords()`, and
+  `ANALYST_LAYERS` covers both tax layers, so voice `analyst_query` answers
+  questions like "which jurisdictions in Europe require CbCR?" or "highest MAP
+  inventory". Datacenters/dams behavior is unchanged (no mapper, no analyst
+  records).
+- The cockpit regional news brief is topic-aware: while a tax layer is enabled,
+  `fetchRegionalBrief` appends `topic=tax` (module-level register in
+  `src/data/regionalBrief.js`; no `ui.js` changes), and the server-side
+  `regionalNewsQuery` helper scopes the same place query to tax coverage. The
+  `/api/regional-brief` middleware whitelists the topic server-side, caches tax
+  and plain briefs under distinct keys, and echoes `newsTopic`.
+- The first-run launcher has a fifth mission tile, **TAX RADAR**, enabling both
+  tax layers (~100 point entities — far below the entity budget that removed the
+  old INFRASTRUCTURE tile). Voice: "tax radar"/"the tax view" enables both
+  layers plus `zoom_to_globe`; the persona instructs the agent to describe the
+  data as a bundled snapshot, never live.
+- Use cases, field dictionary, and extension walkthrough: `docs/TAX-ADVISORY.md`.
+- Regression surface: `src/data/taxLayers.test.mjs`, plus tax coverage in
+  `src/data/analystEngine.test.mjs`, `src/data/localGeojson.test.mjs`,
+  `src/data/regionalBrief.test.mjs`, and `src/firstRunExperience.test.mjs`.
 
 ### Not Currently in Runtime
 

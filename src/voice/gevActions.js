@@ -176,6 +176,13 @@ const LAYER_ALIASES = new Map([
   ['firms', 'local-firms'],
   ['fires', 'local-firms'],
   ['active fires', 'local-firms'],
+  ['transfer pricing', 'local-tp-radar'],
+  ['tp radar', 'local-tp-radar'],
+  ['tp', 'local-tp-radar'],
+  ['tax disputes', 'local-tax-disputes'],
+  ['tax audits', 'local-tax-disputes'],
+  ['map cases', 'local-tax-disputes'],
+  ['tax radar', 'local-tax-disputes'],
 ]);
 
 const CITY_ALIASES = new Map([
@@ -3269,6 +3276,8 @@ function layerTitle(layerId) {
   if (layerId === 'local-dams') return 'Dam';
   if (layerId === 'telegeography-submarine-cables') return 'Submarine Cable';
   if (layerId === 'local-firms') return 'Active Fire';
+  if (layerId === 'local-tp-radar') return 'TP Jurisdiction';
+  if (layerId === 'local-tax-disputes') return 'Tax Disputes Jurisdiction';
   return layerId || 'Entity';
 }
 
@@ -3374,7 +3383,7 @@ async function runAnalystQuery(viewer, dataManager, args = {}) {
   // model burned the turn on retries (field session 2026-08-21, 23:48).
   const items = result.items.map((r) => {
     const compact = { layerKey: r.layerKey, id: r.id };
-    for (const k of ['icao24', 'mmsi', 'registration', 'label', 'callsign', 'name', 'altitudeM', 'speedMps', 'speedKts', 'frp', 'magnitude', 'shipType', 'destination', 'operator', 'routeOrigin', 'routeDestination', 'aircraftClass', 'military', 'onGround', 'distanceKm', 'confidence', 'place']) {
+    for (const k of ['icao24', 'mmsi', 'registration', 'label', 'callsign', 'name', 'altitudeM', 'speedMps', 'speedKts', 'frp', 'magnitude', 'shipType', 'destination', 'operator', 'routeOrigin', 'routeDestination', 'aircraftClass', 'military', 'onGround', 'distanceKm', 'confidence', 'place', 'iso2', 'auditIntensity', 'mapInventoryTp', 'mapAvgMonthsTp', 'treatyCount', 'whtDividendPct', 'whtRoyaltyPct', 'cbcrThresholdEur', 'cbcrRequired', 'apa', 'tpDeadline', 'citRate']) {
       if (r[k] !== null && r[k] !== undefined) compact[k] = r[k];
     }
     return compact;

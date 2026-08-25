@@ -175,6 +175,14 @@ export const DATA_CREDITS = [
       '<a href="https://www.submarinecablemap.com" target="_blank" rel="noopener">submarinecablemap.com</a> ' +
       '(CC BY-NC-SA 3.0 — NonCommercial)',
   },
+  {
+    key: 'tax-advisory',
+    html:
+      'Tax advisory snapshots (TP Radar, Tax Disputes &amp; M&amp;A): hand-curated summaries of ' +
+      '<a href="https://www.oecd.org/tax/transfer-pricing-country-profiles.htm" target="_blank" rel="noopener">OECD TP Country Profiles</a>, ' +
+      '<a href="https://www.oecd.org/tax/dispute/mutual-agreement-procedure-statistics.htm" target="_blank" rel="noopener">OECD MAP Statistics</a> ' +
+      '&amp; public national law — © OECD source publications; not tax advice',
+  },
 ];
 
 /**
