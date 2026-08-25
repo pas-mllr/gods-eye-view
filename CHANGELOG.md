@@ -7,6 +7,18 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ### Added
 
+- Upgraded the Tax Radar from snapshot to live/predictive: dated policy
+  states (Pillar Two status, safe-harbour end, e-invoicing mandates, GIR
+  deadlines) rendered as deadline-urgency stem colors; a live OECD SDMX
+  overlay merging CIT rates and MAP caseloads over the bundled figures with
+  per-field provenance; a live tax-events layer aggregating GDELT tax news
+  per jurisdiction (10-minute poll, freshness-faded pins); an
+  entity-footprint layer loading a group's legal entities from an
+  env-pointed pack (fictional Aurora demo committed) with a deterministic
+  PREDICTED audit-risk overlay; and intercompany-flow arcs colored by flow
+  type. All five tax layers are voice-queryable; the analyst voice payload
+  is now derived per layer from the analyst schema.
+
 - Added a Tax Advisory Radar for global tax teams: two bundled jurisdiction
   layers — TP Radar (transfer-pricing obligations, CbCR/master/local-file
   requirements, APA availability, CIT rates) and Tax Disputes & M&A (MAP

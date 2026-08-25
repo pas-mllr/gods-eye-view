@@ -8,7 +8,7 @@ import {
 import { getNextIssPass } from '../data/satellites.js';
 import { CCTV_FOCUS_RESULT } from '../data/cctv.js';
 import { contextModeWord } from '../contextModePolicy.js';
-import { createAnalystEngine } from '../data/analystEngine.js';
+import { compactFieldsForLayer, createAnalystEngine } from '../data/analystEngine.js';
 import { layerFeedState } from '../data/manager.js';
 import militaryAwarenessLayer, {
   collectAircraftProximityWindow,
@@ -183,6 +183,15 @@ const LAYER_ALIASES = new Map([
   ['tax audits', 'local-tax-disputes'],
   ['map cases', 'local-tax-disputes'],
   ['tax radar', 'local-tax-disputes'],
+  ['tax events', 'tax-events'],
+  ['tax news', 'tax-events'],
+  ['entity footprint', 'entity-footprint'],
+  ['group entities', 'entity-footprint'],
+  ['footprint', 'entity-footprint'],
+  ['our entities', 'entity-footprint'],
+  ['intercompany flows', 'tax-flows'],
+  ['tax flows', 'tax-flows'],
+  ['flows', 'tax-flows'],
 ]);
 
 const CITY_ALIASES = new Map([
@@ -3278,6 +3287,9 @@ function layerTitle(layerId) {
   if (layerId === 'local-firms') return 'Active Fire';
   if (layerId === 'local-tp-radar') return 'TP Jurisdiction';
   if (layerId === 'local-tax-disputes') return 'Tax Disputes Jurisdiction';
+  if (layerId === 'tax-events') return 'Tax Event';
+  if (layerId === 'entity-footprint') return 'Group Entity';
+  if (layerId === 'tax-flows') return 'Intercompany Flow';
   return layerId || 'Entity';
 }
 
@@ -3383,7 +3395,10 @@ async function runAnalystQuery(viewer, dataManager, args = {}) {
   // model burned the turn on retries (field session 2026-08-21, 23:48).
   const items = result.items.map((r) => {
     const compact = { layerKey: r.layerKey, id: r.id };
-    for (const k of ['icao24', 'mmsi', 'registration', 'label', 'callsign', 'name', 'altitudeM', 'speedMps', 'speedKts', 'frp', 'magnitude', 'shipType', 'destination', 'operator', 'routeOrigin', 'routeDestination', 'aircraftClass', 'military', 'onGround', 'distanceKm', 'confidence', 'place', 'iso2', 'auditIntensity', 'mapInventoryTp', 'mapAvgMonthsTp', 'treatyCount', 'whtDividendPct', 'whtRoyaltyPct', 'cbcrThresholdEur', 'cbcrRequired', 'apa', 'tpDeadline', 'citRate']) {
+    // Per-layer field set derived from ANALYST_LAYERS (plus the identity
+    // fields) — replaces the old flat global whitelist, so a layer's schema
+    // additions reach the voice payload without touching this file.
+    for (const k of compactFieldsForLayer(r.layerKey)) {
       if (r[k] !== null && r[k] !== undefined) compact[k] = r[k];
     }
     return compact;

@@ -37,6 +37,9 @@ test('new data proxies install the same routes in dev and preview servers', () =
   const byName = new Map(config.plugins.map((plugin) => [plugin.name, plugin]));
   for (const name of [
     'rocket-launches-proxy',
+    'oecd-tax-proxy',
+    'tax-events-proxy',
+    'entity-footprint-proxy',
     'military-installations-proxy',
     'regional-brief-proxy',
     'weather-effects-proxy',

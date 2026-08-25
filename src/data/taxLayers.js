@@ -1,6 +1,12 @@
 import { createLocalGeoJsonLayer } from './localGeojson.js';
 import { setRegionalBriefTopicSource } from './regionalBrief.js';
-import { mapTpAnalystRecord, mapDisputesAnalystRecord } from './taxAnalystRecords.js';
+import {
+  applyOecdToDisputesRecord,
+  applyOecdToTpRecord,
+  mapTpAnalystRecord,
+  mapDisputesAnalystRecord,
+} from './taxAnalystRecords.js';
+import { deadlineUrgency } from './taxPolicy.js';
 
 // Use Vite's ?url import to properly resolve these assets in dev and build
 import tpRadarUrl from './local_data/tax_advisory/tp_radar.geojsonl?url';
@@ -18,6 +24,27 @@ import taxDisputesUrl from './local_data/tax_advisory/tax_disputes.geojsonl?url'
  */
 
 export const TAX_LAYER_IDS = Object.freeze(['local-tp-radar', 'local-tax-disputes']);
+
+/** Both tax layers re-check the OECD live overlay this often. */
+export const TAX_LIVE_REFRESH_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Fetch the OECD live overlay through the same-origin proxy. Null on any
+ * failure — the factory then keeps the bundled snapshot and marks the live
+ * overlay stale only if it had succeeded before.
+ * @param {{signal?: AbortSignal}} [options]
+ * @returns {Promise<object|null>}
+ */
+async function fetchOecdTax({ signal } = {}) {
+  try {
+    const response = await fetch('/api/oecd-tax', { signal });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
 
 /**
  * Register the layer with the regional-brief topic register so the cockpit's
@@ -57,6 +84,13 @@ export const tpRadarLayer = withTaxNewsTopic(createLocalGeoJsonLayer({
   labelMax: 200,
   labelGridPx: 150,
   analystRecord: mapTpAnalystRecord,
+  // Deadline-urgency stems: overdue red / imminent amber-orange / upcoming
+  // yellow, from the record's dated obligations; null keeps the layer amber.
+  markerColor: (props) => deadlineUrgency(props, Date.now()).color,
+  liveUpdate: fetchOecdTax,
+  applyLive: applyOecdToTpRecord,
+  refreshInterval: TAX_LIVE_REFRESH_MS,
+  liveSourceLabel: 'OECD SDMX · LIVE + BUNDLED 2026-08',
 }));
 
 export const taxDisputesLayer = withTaxNewsTopic(createLocalGeoJsonLayer({
@@ -70,4 +104,8 @@ export const taxDisputesLayer = withTaxNewsTopic(createLocalGeoJsonLayer({
   labelMax: 200,
   labelGridPx: 150,
   analystRecord: mapDisputesAnalystRecord,
+  liveUpdate: fetchOecdTax,
+  applyLive: applyOecdToDisputesRecord,
+  refreshInterval: TAX_LIVE_REFRESH_MS,
+  liveSourceLabel: 'OECD MAP SDMX · LIVE + BUNDLED 2026-08',
 }));

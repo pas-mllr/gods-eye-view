@@ -51,6 +51,10 @@ import {
   normalizeRegionalWeather,
 } from './src/data/regionalBrief.js';
 import { normalizeAdsbLolPointResponse } from './src/data/adsbLolFallback.js';
+import { normalizeOecdTaxPayload } from './src/data/oecdSdmx.js';
+import { aggregateTaxEventPoints, normalizeTaxEventArticles } from './src/data/taxEventsFeed.js';
+import { buildJurisdictionIndex, indexByCountryName } from './src/data/taxJurisdictionIndex.js';
+import { footprintEntitiesToGeojsonl, normalizeFootprintPack } from './src/data/entityFootprintPack.js';
 import { createAisStreamAdapter, isRecognizedAisEnvelope } from './src/data/aisStreamAdapter.js';
 import { parseSilenceTimeoutEnv } from './src/data/aisWatchdog.js';
 import {
@@ -1711,6 +1715,371 @@ function rocketLaunchesProxy() {
 
   return {
     name: 'rocket-launches-proxy',
+    configureServer(server) {
+      install(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      install(server.middlewares);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// OECD tax data proxy (/api/oecd-tax)
+//
+// Live jurisdiction figures for the tax advisory layers: statutory CIT rates
+// and MAP caseloads from the OECD SDMX API, normalized server-side by the
+// pure src/data/oecdSdmx.js walker into two independent sub-feeds. Both
+// dataflow ids and keys are env-tunable because the OECD occasionally
+// reshuffles dataflow identifiers — a wrong default is a .env fix, and until
+// then the layers honestly keep their BUNDLED figures (the client treats an
+// unavailable sub-feed as "no live overlay", never an error).
+
+export const OECD_TAX_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Build one SDMX data URL from env-tunable parts. */
+export function oecdSdmxUrl(dataflow, key, base = process.env.OECD_SDMX_BASE) {
+  const root = String(base || 'https://sdmx.oecd.org/public/rest/data').replace(/\/+$/, '');
+  const url = new URL(`${root}/${dataflow}/${key || 'all'}`);
+  url.searchParams.set('format', 'jsondata');
+  url.searchParams.set('lastNObservations', '1');
+  return url;
+}
+
+function oecdTaxProxy() {
+  const ttlMs = OECD_TAX_CACHE_TTL_MS;
+  const maxResponseBytes = 8 * 1024 * 1024;
+  const maxDiskCacheBytes = 16 * 1024 * 1024;
+  const cachePath = path.join(process.cwd(), '.gev-cache', 'oecd-tax-v1.json');
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const stat = await fsp.stat(cachePath);
+      if (stat.size > maxDiskCacheBytes) throw new Error('cache file too large');
+      const parsed = JSON.parse(await fsp.readFile(cachePath, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') {
+        const body = JSON.parse(parsed.body);
+        if (body?.cit && body?.map) cache = parsed;
+      }
+    } catch { /* first run or invalid cache */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(cachePath), { recursive: true });
+      await fsp.writeFile(cachePath, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[oecd-tax-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=3600' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function fetchSdmxFeed(dataflow, key) {
+    const upstream = await fetch(oecdSdmxUrl(dataflow, key), {
+      signal: AbortSignal.timeout(20000),
+      headers: { Accept: 'application/vnd.sdmx.data+json, application/json' },
+    });
+    const body = await readResponseTextCapped(upstream, maxResponseBytes);
+    if (!upstream.ok) throw new Error(`upstream HTTP ${upstream.status}`);
+    return JSON.parse(body);
+  }
+
+  async function refreshUpstream() {
+    // Each sub-feed fails independently; only a double failure throws so the
+    // serve-stale path takes over. A half-available payload is cached — the
+    // layers merge whatever arrived and keep bundled figures for the rest.
+    const [citResult, mapResult] = await Promise.allSettled([
+      fetchSdmxFeed(
+        process.env.OECD_CIT_DATAFLOW || 'OECD.CTP.TPS,DSD_CTS@DF_CTS_CIT,1.0',
+        process.env.OECD_CIT_KEY || 'all',
+      ),
+      fetchSdmxFeed(
+        process.env.OECD_MAP_DATAFLOW || 'OECD.CTP.TPS,DSD_MAP@DF_MAP,1.0',
+        process.env.OECD_MAP_KEY || 'all',
+      ),
+    ]);
+    const cit = citResult.status === 'fulfilled' ? citResult.value : null;
+    const map = mapResult.status === 'fulfilled' ? mapResult.value : null;
+    for (const [label, settled] of [['cit', citResult], ['map', mapResult]]) {
+      if (settled.status === 'rejected') {
+        console.warn(`[oecd-tax-proxy] ${label} feed failed: ${settled.reason?.message || settled.reason}`);
+      }
+    }
+    const payload = normalizeOecdTaxPayload(cit, map);
+    if (payload.cit.status !== 'ready' && payload.map.status !== 'ready') {
+      throw new Error('no OECD sub-feed available');
+    }
+    const fresh = { at: Date.now(), body: JSON.stringify(payload) };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/oecd-tax', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      const now = Date.now();
+      if (cache && now - cache.at < ttlMs) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'oecd-tax', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) console.warn(`[oecd-tax-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(res, 502, JSON.stringify({ error: 'OECD tax data unavailable' }), 'NONE');
+      }
+    });
+  }
+
+  return {
+    name: 'oecd-tax-proxy',
+    configureServer(server) {
+      install(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      install(server.middlewares);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tax events proxy (/api/tax-events)
+//
+// Live, geocoded tax news: GDELT DOC 2.0 artlist on a tax query, normalized
+// and aggregated server-side (src/data/taxEventsFeed.js) onto the bundled
+// jurisdiction anchors — the client never parses GDELT, and articles from
+// countries outside the 51-jurisdiction set are reported as unmatchedCount,
+// never silently dropped. GDELT DOC is chosen over the GEO API on purpose:
+// artlist carries seendate (the decay input) and plain fields; GEO returns
+// untrusted HTML blobs and no timestamps.
+
+export const TAX_EVENTS_CACHE_TTL_MS = 15 * 60_000;
+export const TAX_EVENTS_DEFAULT_QUERY =
+  '(tax OR "transfer pricing" OR "tax authority" OR OECD OR "Pillar Two" OR "tax audit" OR "tax dispute")';
+
+/** Lazy shared jurisdiction index over the bundled tax datasets (fs-read once). */
+let _taxJurisdictionIndex = null;
+function taxJurisdictionIndex() {
+  if (_taxJurisdictionIndex) return _taxJurisdictionIndex;
+  const dir = path.join(__dirname, 'src', 'data', 'local_data', 'tax_advisory');
+  let tpText = '';
+  let disputesText = '';
+  try {
+    tpText = fs.readFileSync(path.join(dir, 'tp_radar.geojsonl'), 'utf8');
+    disputesText = fs.readFileSync(path.join(dir, 'tax_disputes.geojsonl'), 'utf8');
+  } catch (error) {
+    console.warn(`[tax-proxies] jurisdiction datasets unreadable: ${error?.message || error}`);
+  }
+  _taxJurisdictionIndex = buildJurisdictionIndex(tpText, disputesText);
+  return _taxJurisdictionIndex;
+}
+
+function taxEventsProxy() {
+  const ttlMs = TAX_EVENTS_CACHE_TTL_MS;
+  const maxResponseBytes = 4 * 1024 * 1024;
+  let cache = null;
+  const inFlight = new Map();
+  let jurisdictionNameIndex = null;
+
+  function nameIndex() {
+    if (!jurisdictionNameIndex) jurisdictionNameIndex = indexByCountryName(taxJurisdictionIndex());
+    return jurisdictionNameIndex;
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=300' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function refreshUpstream() {
+    const params = new URLSearchParams({
+      query: process.env.TAX_EVENTS_QUERY || TAX_EVENTS_DEFAULT_QUERY,
+      mode: 'artlist',
+      format: 'json',
+      maxrecords: '75',
+      sort: 'datedesc',
+      timespan: '72h',
+    });
+    const upstream = await fetch(`https://api.gdeltproject.org/api/v2/doc/doc?${params}`, {
+      signal: AbortSignal.timeout(15000),
+      headers: { 'User-Agent': 'GodsEyeView/0.1' },
+    });
+    const body = await readResponseTextCapped(upstream, maxResponseBytes);
+    if (!upstream.ok) throw new Error(`upstream HTTP ${upstream.status}`);
+    const articles = normalizeTaxEventArticles(JSON.parse(body));
+    const now = Date.now();
+    const { points, unmatchedCount } = aggregateTaxEventPoints(articles, nameIndex(), now);
+    const payload = {
+      retrievedAt: new Date(now).toISOString(),
+      points,
+      articleCount: articles.length,
+      unmatchedCount,
+    };
+    const fresh = { at: now, body: JSON.stringify(payload) };
+    cache = fresh;
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/tax-events', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      const now = Date.now();
+      if (cache && now - cache.at < ttlMs) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'tax-events', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) console.warn(`[tax-events-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(res, 503, JSON.stringify({ error: 'Tax events are temporarily unavailable' }), 'NONE');
+      }
+    });
+  }
+
+  return {
+    name: 'tax-events-proxy',
+    configureServer(server) {
+      install(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      install(server.middlewares);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Entity footprint proxy (/api/entity-footprint)
+//
+// The CCTV source-pack pattern applied to a corporate group: an env-pointed,
+// operator-trusted JSON pack (ENTITY_FOOTPRINT_FILE / ENTITY_FOOTPRINT_JSON)
+// of legal entities and intercompany flows, defaulting to the committed —
+// and clearly FICTIONAL — Aurora demo group so the layers work out of the
+// box. Normalization, jurisdiction enrichment, and PREDICTED risk scoring
+// happen server-side in the pure entityFootprintPack module; the client only
+// ever sees the normalized projection. Client-confidential packs are never
+// committed and never fetched from client-supplied URLs.
+
+export const ENTITY_FOOTPRINT_CACHE_MS = 60_000;
+const DEFAULT_FOOTPRINT_FILE = 'config/entity_footprint.example.json';
+
+function entityFootprintProxy() {
+  let cached = null;
+  let cachedAt = 0;
+
+  function loadRawPack() {
+    const inline = process.env.ENTITY_FOOTPRINT_JSON;
+    if (inline) {
+      try {
+        const parsed = JSON.parse(inline);
+        if (parsed && typeof parsed === 'object') return { raw: parsed, packSource: 'env' };
+      } catch {
+        console.warn('[entity-footprint-proxy] ENTITY_FOOTPRINT_JSON is not valid JSON — falling back to the file pack');
+      }
+    }
+    const configured = process.env.ENTITY_FOOTPRINT_FILE;
+    const sourceFile = configured || DEFAULT_FOOTPRINT_FILE;
+    const resolved = path.isAbsolute(sourceFile) ? sourceFile : path.resolve(__dirname, sourceFile);
+    try {
+      if (!fs.existsSync(resolved)) {
+        // A missing CONFIGURED pack is an operator mistake and must be loud —
+        // an empty 200 with no warning would hide the typo behind a nominal
+        // zero-count chip. (The missing default example only means a trimmed
+        // install; that stays quiet.)
+        const loadWarnings = configured
+          ? [`configured pack not found: ${resolved} (ENTITY_FOOTPRINT_FILE)`]
+          : [];
+        return { raw: null, packSource: null, loadWarnings };
+      }
+      const parsed = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+      if (parsed && typeof parsed === 'object') {
+        return { raw: parsed, packSource: configured ? 'file' : 'example', loadWarnings: [] };
+      }
+      return { raw: null, packSource: null, loadWarnings: [`pack is not a JSON object: ${resolved}`] };
+    } catch (error) {
+      return {
+        raw: null,
+        packSource: null,
+        loadWarnings: [`failed to read pack ${resolved}: ${error?.message || error}`],
+      };
+    }
+  }
+
+  function getPack() {
+    const now = Date.now();
+    if (cached && now - cachedAt < ENTITY_FOOTPRINT_CACHE_MS) return cached;
+    const { raw, packSource, loadWarnings } = loadRawPack();
+    const maxEntities = Math.max(1, Math.min(500, Number(process.env.ENTITY_FOOTPRINT_MAX) || 200));
+    const pack = normalizeFootprintPack(raw || {}, taxJurisdictionIndex(), { maxEntities });
+    pack.warnings = [...loadWarnings, ...pack.warnings];
+    for (const warning of pack.warnings) {
+      console.warn(`[entity-footprint-proxy] ${warning}`);
+    }
+    cached = { ...pack, packSource, retrievedAt: new Date(now).toISOString() };
+    cachedAt = now;
+    return cached;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/entity-footprint', (req, res) => {
+      if (req.method !== 'GET') {
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Method Not Allowed' }));
+        return;
+      }
+      const url = new URL(req.url || '', 'http://localhost');
+      const pack = getPack();
+      if (url.pathname === '/entities.geojsonl') {
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
+        res.end(footprintEntitiesToGeojsonl(pack));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(pack));
+    });
+  }
+
+  return {
+    name: 'entity-footprint-proxy',
     configureServer(server) {
       install(server.middlewares);
     },
@@ -5155,7 +5524,7 @@ function openAiRealtimeProxy() {
             // GEV_REALTIME_TOOLS is deliberately untouched — deleting this one
             // string is the whole rollback.
             'NAMED VIEWS are shorthand for tool calls you already have — there is no "mode" tool for them. Treat ONLY these as the shorthand: "infrastructure mode" / "the infrastructure view" / "show me global infrastructure" means three set_layer_visibility calls (local-datacenters, local-dams, telegeography-submarine-cables) plus zoom_to_globe; "environmental mode" / "earth watch" / "active events", said as the name of a view, means set_layer_visibility for local-firms and earthquakes plus zoom_to_globe. Anything vaguer is NOT this shorthand — an open-ended question about the world or the news is an ordinary question: answer it, or use analyst_query over the layers already on. Never switch a whole view on to answer a question nobody asked to see. When you do run one, make every call before speaking, then give one confirmation naming the resulting state; if the fires layer comes back unavailable because no FIRMS key is configured, say so plainly — the earthquakes still loaded. "Live contacts" and "space missions" are NOT this pattern: they stay set_context_mode{mode:"contacts"} and set_context_mode{mode:"space-missions"}.',
-            '"Tax radar" / "the tax view" / "global tax view" means two set_layer_visibility calls (local-tp-radar, local-tax-disputes) plus zoom_to_globe. Questions about transfer pricing obligations, CbCR, master/local file, APAs, MAP caseloads, audit intensity, treaties, or withholding rates over those layers use analyst_query. Both are BUNDLED curated snapshots, not live feeds — if asked how current the data is, say it is a bundled snapshot with per-record as-of dates, not live.',
+            '"Tax radar" / "the tax view" / "global tax view" means three set_layer_visibility calls (local-tp-radar, local-tax-disputes, tax-events) plus zoom_to_globe. Questions about transfer pricing obligations, CbCR, master/local file, APAs, MAP caseloads, audit intensity, treaties, withholding rates, Pillar Two status, e-invoicing mandates, or GIR deadlines over those layers use analyst_query. The two jurisdiction layers are curated snapshots with an OECD live overlay where available — records carry citRateSource/mapStatsSource saying which figures are oecd-live vs bundled; report that provenance when asked how current a figure is. tax-events is LIVE tax news (GDELT), aggregated per jurisdiction with article counts and age. entity-footprint and tax-flows show the CONFIGURED group pack — by default a clearly FICTIONAL demo group (say so if asked whose data it is); their riskScore/riskBand fields are PREDICTED, a deterministic editorial weighting, never a fact — always say "predicted risk", never state it as the entity\'s actual audit risk.',
             'For visual filter requests, call set_visual_style with one of the allowed style IDs.',
             'Disambiguation table — basemap vs layer vs style: basemap switching requires an explicit stack name — "Bing aerial" means set_map_stack bing-aerial, "aerial with labels" means bing-labels, "OSM"/"road map" means osm, "Google 3D"/"photorealistic" means photoreal. Any mention of "satellite" or "satellites" ALWAYS means the satellites DATA LAYER via set_layer_visibility, never a basemap. "surveillance"/"night vision"/"thermal" are visual STYLES via set_visual_style.',
             'HUD requests ("hud on/off", "switch to operator/minimal/tactical layout") use set_hud. Detection requests ("detection on", "dense mode", "balanced mode", "sparse mode", "set density to 25", "use weighted allocation") use set_detection. Density snaps to 0/25/50/75/100 and derives Sparse/Balanced/Dense; panoptic is a legacy alias for Dense.',
@@ -5641,7 +6010,7 @@ const GEV_REALTIME_TOOLS = [
         layerId: {
           type: 'string',
           description:
-            'Common-name mapping for the non-obvious ids: space mission(s) → rocket-launches; fires/wildfires/active fires → local-firms (NASA FIRMS); ships/vessels/boats → ais-live-vessels; undersea/submarine cables → telegeography-submarine-cables; datacenters → local-datacenters; dams → local-dams; bikes/bike share → bikeshare; street traffic/congestion → traffic; traffic cameras → cctv; internet radio/stations → radio; transfer pricing/TP → local-tp-radar; tax disputes/tax audits/MAP cases → local-tax-disputes.',
+            'Common-name mapping for the non-obvious ids: space mission(s) → rocket-launches; fires/wildfires/active fires → local-firms (NASA FIRMS); ships/vessels/boats → ais-live-vessels; undersea/submarine cables → telegeography-submarine-cables; datacenters → local-datacenters; dams → local-dams; bikes/bike share → bikeshare; street traffic/congestion → traffic; traffic cameras → cctv; internet radio/stations → radio; transfer pricing/TP → local-tp-radar; tax disputes/tax audits/MAP cases → local-tax-disputes; tax news/tax events → tax-events (live GDELT); our entities/group footprint → entity-footprint; intercompany/tax flows → tax-flows.',
           enum: [
             'flights',
             'military',
@@ -5659,6 +6028,9 @@ const GEV_REALTIME_TOOLS = [
             'local-firms',
             'local-tp-radar',
             'local-tax-disputes',
+            'tax-events',
+            'entity-footprint',
+            'tax-flows',
           ],
         },
         enabled: { type: 'boolean' },
@@ -5692,6 +6064,9 @@ const GEV_REALTIME_TOOLS = [
             'local-firms',
             'local-tp-radar',
             'local-tax-disputes',
+            'tax-events',
+            'entity-footprint',
+            'tax-flows',
           ],
           description: 'Optional layer row to scroll into view and highlight.',
         },
@@ -6109,8 +6484,8 @@ const GEV_REALTIME_TOOLS = [
       properties: {
         layers: {
           type: 'array',
-          items: { type: 'string', enum: ['flights', 'military', 'ais-live-vessels', 'local-firms', 'earthquakes', 'local-tp-radar', 'local-tax-disputes'] },
-          description: 'Layers to query. fires/wildfires → local-firms; ships/vessels → ais-live-vessels; transfer pricing/TP obligations → local-tp-radar; tax disputes/audits/MAP/withholding/treaties → local-tax-disputes.',
+          items: { type: 'string', enum: ['flights', 'military', 'ais-live-vessels', 'local-firms', 'earthquakes', 'local-tp-radar', 'local-tax-disputes', 'tax-events', 'entity-footprint', 'tax-flows'] },
+          description: 'Layers to query. fires/wildfires → local-firms; ships/vessels → ais-live-vessels; transfer pricing/TP obligations → local-tp-radar; tax disputes/audits/MAP/withholding/treaties → local-tax-disputes; live tax news pins → tax-events; the configured group\'s own entities → entity-footprint; its intercompany flows → tax-flows.',
         },
         scope: {
           type: 'object',
@@ -6125,7 +6500,7 @@ const GEV_REALTIME_TOOLS = [
         },
         filters: {
           type: 'array',
-          description: 'Attribute predicates, ANDed. ALTITUDE IS METERS (40,000 ft = 12192). Fields: altitudeM, speedMps, military, onGround, aircraftClass, callsign, operator, routeOrigin, routeDestination, originCountry (flights); speedKts, shipType, destination (ships); frp, confidence (fires); magnitude, depthKm, place (earthquakes); name, iso2, citRate, cbcrRequired, masterFileRequired, localFileRequired, apaBilateral, tpDeadline (local-tp-radar); auditIntensity, mapInventoryTp, mapAvgMonthsTp, treatyCount, whtDividendPct, whtInterestPct, whtRoyaltyPct, arbitrationAvailable, mliSigned, participationExemption (local-tax-disputes).',
+          description: 'Attribute predicates, ANDed. ALTITUDE IS METERS (40,000 ft = 12192). Fields: altitudeM, speedMps, military, onGround, aircraftClass, callsign, operator, routeOrigin, routeDestination, originCountry (flights); speedKts, shipType, destination (ships); frp, confidence (fires); magnitude, depthKm, place (earthquakes); name, iso2, citRate, cbcrRequired, masterFileRequired, localFileRequired, apaBilateral, tpDeadline, pillarTwoStatus, eInvoicingPhase, daysToGirDeadline, citRateSource (local-tp-radar); auditIntensity, mapInventoryTp, mapAvgMonthsTp, treatyCount, whtDividendPct, whtInterestPct, whtRoyaltyPct, arbitrationAvailable, mliSigned, participationExemption (local-tax-disputes); articleCount, ageHours, latestTitle (tax-events); role, riskScore, riskBand, ipOwner, financing, daysToSafeHarbourEnd (entity-footprint — riskScore/riskBand are PREDICTED, always say so); flowType, fromEntity, toEntity, annualValueEur, crossBorder, pricingMethod (tax-flows).',
           items: {
             type: 'object',
             additionalProperties: false,
@@ -7382,6 +7757,9 @@ export default defineConfig(({ mode }) => {
       tomtomProxy(),
       firmsProxy(),
       rocketLaunchesProxy(),
+      oecdTaxProxy(),
+      taxEventsProxy(),
+      entityFootprintProxy(),
       terrainHeightsProxy(),
       adsbdbProxy(),
       overpassProxy(),

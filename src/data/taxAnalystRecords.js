@@ -8,6 +8,8 @@
  * guards against drift in either direction.
  */
 
+import { daysUntil } from './taxPolicy.js';
+
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
   const numeric = Number(value);
@@ -28,10 +30,12 @@ function textOrNull(value) {
 /**
  * Map one TP Radar feature's properties into a flat analyst record.
  * @param {object} props Unwrapped GeoJSON properties.
- * @param {{id?: string, lat?: number, lon?: number}} [anchor] Record identity/position.
+ * @param {{id?: string, lat?: number, lon?: number, nowMs?: number}} [anchor]
+ *   Record identity/position; nowMs is an injectable clock for the derived
+ *   daysToGirDeadline field (tests pass a fixed value).
  * @returns {object|null}
  */
-export function mapTpAnalystRecord(props, { id, lat, lon } = {}) {
+export function mapTpAnalystRecord(props, { id, lat, lon, nowMs = Date.now() } = {}) {
   if (!props || typeof props !== 'object') return null;
   return {
     id: textOrNull(props.name) || String(id ?? ''),
@@ -50,6 +54,15 @@ export function mapTpAnalystRecord(props, { id, lat, lon } = {}) {
     cbcrRequired: boolOrNull(props.cbcrRequired),
     apaBilateral: boolOrNull(props.apaBilateral),
     mapAvailable: boolOrNull(props.mapAvailable),
+    pillarTwoStatus: textOrNull(props.pillarTwoStatus),
+    safeHarbourUntil: textOrNull(props.safeHarbourUntil),
+    eInvoicingPhase: textOrNull(props.eInvoicingPhase),
+    eInvoicingFrom: textOrNull(props.eInvoicingFrom),
+    girNextDeadline: textOrNull(props.girNextDeadline),
+    // Numeric companion so gt/lt filters work (ISO strings don't compare
+    // numerically in the engine's applyFilter).
+    daysToGirDeadline: daysUntil(props.girNextDeadline, nowMs),
+    citRateSource: textOrNull(props.citRateSource) || 'bundled',
   };
 }
 
@@ -80,5 +93,41 @@ export function mapDisputesAnalystRecord(props, { id, lat, lon } = {}) {
     icapMember: boolOrNull(props.icapMember),
     mliSigned: boolOrNull(props.mliSigned),
     participationExemption: boolOrNull(props.participationExemption),
+    mapStatsSource: textOrNull(props.mapStatsSource) || 'bundled',
+  };
+}
+
+/**
+ * Live-merge patch for one TP record: statutory CIT rate from the OECD CIT
+ * sub-feed, with provenance fields so cards/queries can say which figures
+ * are live vs bundled. Pure — consumed by taxLayers.js as its applyLive hook.
+ * @param {object} props Record properties (bundled + prior patches).
+ * @param {object} payload /api/oecd-tax payload.
+ * @returns {object|null} Patch, or null to leave the record untouched.
+ */
+export function applyOecdToTpRecord(props, payload) {
+  const value = payload?.cit?.status === 'ready' ? payload.cit.byIso3?.[props?.iso3] : undefined;
+  if (!Number.isFinite(value)) return null;
+  return {
+    citRate: value,
+    citRateSource: 'oecd-live',
+    citRateAsOf: payload.cit.period ?? null,
+  };
+}
+
+/**
+ * Live-merge patch for one disputes record: MAP TP caseload from the OECD
+ * MAP sub-feed, with provenance fields. Pure — taxLayers.js applyLive hook.
+ * @param {object} props Record properties.
+ * @param {object} payload /api/oecd-tax payload.
+ * @returns {object|null} Patch, or null to leave the record untouched.
+ */
+export function applyOecdToDisputesRecord(props, payload) {
+  const value = payload?.map?.status === 'ready' ? payload.map.byIso3?.[props?.iso3] : undefined;
+  if (!Number.isFinite(value)) return null;
+  return {
+    mapInventoryTp: value,
+    mapStatsSource: 'oecd-live',
+    mapStatsAsOf: payload.map.period ?? null,
   };
 }

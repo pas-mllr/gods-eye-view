@@ -158,3 +158,66 @@ test('analyst mappers coerce types and keep nulls null', () => {
   assert.equal(mapTpAnalystRecord(null), null);
   assert.equal(mapDisputesAnalystRecord(undefined), null);
 });
+
+test('tax datasets: dated policy states are typed, enum-valid, and internally consistent', () => {
+  const P2 = new Set(['enacted', 'qdmtt-only', 'draft', 'announced', 'none']);
+  const EI = new Set(['none', 'announced', 'voluntary', 'mandatory']);
+  const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+  const dateOrNull = (value, label) => {
+    assert.ok(value === null || ISO_DATE.test(value), `${label} is YYYY-MM-DD or null`);
+  };
+  for (const feature of TP) {
+    const p = feature.properties;
+    assert.ok(P2.has(p.pillarTwoStatus), `${p.name}: pillarTwoStatus is a known status`);
+    assert.ok(EI.has(p.eInvoicingPhase), `${p.name}: eInvoicingPhase is a known phase`);
+    dateOrNull(p.safeHarbourUntil, `${p.name}: safeHarbourUntil`);
+    dateOrNull(p.eInvoicingFrom, `${p.name}: eInvoicingFrom`);
+    dateOrNull(p.girNextDeadline, `${p.name}: girNextDeadline`);
+    const globeAdopter = p.pillarTwoStatus === 'enacted' || p.pillarTwoStatus === 'qdmtt-only';
+    assert.equal(p.safeHarbourUntil !== null, globeAdopter,
+      `${p.name}: safe-harbour date tracks GloBE adoption`);
+    assert.equal(p.girNextDeadline !== null, globeAdopter,
+      `${p.name}: GIR deadline tracks GloBE adoption`);
+    if (p.eInvoicingFrom !== null) {
+      assert.notEqual(p.eInvoicingPhase, 'none',
+        `${p.name}: a dated e-invoicing mandate cannot have phase none`);
+    }
+  }
+});
+
+test('tp analyst mapper derives daysToGirDeadline from an injectable clock', () => {
+  const NOW = Date.UTC(2026, 7, 25);
+  const record = mapTpAnalystRecord(
+    { name: 'Germany', girNextDeadline: '2027-03-31', citRate: 29.9 },
+    { id: 'tp-DE', lat: 52.52, lon: 13.405, nowMs: NOW },
+  );
+  assert.equal(record.daysToGirDeadline, 218);
+  assert.equal(record.girNextDeadline, '2027-03-31');
+  assert.equal(record.citRateSource, 'bundled', 'bundled is the default provenance');
+
+  const none = mapTpAnalystRecord({ name: 'United States' }, { nowMs: NOW });
+  assert.equal(none.daysToGirDeadline, null);
+  assert.equal(none.pillarTwoStatus, null);
+});
+
+test('OECD live-merge patches carry values and provenance, and refuse bad feeds', async () => {
+  const { applyOecdToTpRecord, applyOecdToDisputesRecord } = await import('./taxAnalystRecords.js');
+  const payload = {
+    cit: { status: 'ready', period: '2025', byIso3: { DEU: 29.83 } },
+    map: { status: 'ready', period: '2024', byIso3: { DEU: 415 } },
+  };
+  assert.deepEqual(applyOecdToTpRecord({ iso3: 'DEU' }, payload), {
+    citRate: 29.83, citRateSource: 'oecd-live', citRateAsOf: '2025',
+  });
+  assert.deepEqual(applyOecdToDisputesRecord({ iso3: 'DEU' }, payload), {
+    mapInventoryTp: 415, mapStatsSource: 'oecd-live', mapStatsAsOf: '2024',
+  });
+  // Areas the feed does not cover, unavailable feeds, and junk stay bundled.
+  assert.equal(applyOecdToTpRecord({ iso3: 'BRA' }, payload), null);
+  assert.equal(applyOecdToTpRecord({ iso3: 'DEU' }, { cit: { status: 'unavailable', byIso3: {} } }), null);
+  assert.equal(applyOecdToTpRecord({ iso3: 'DEU' }, null), null);
+  assert.equal(
+    applyOecdToTpRecord({ iso3: 'DEU' }, { cit: { status: 'ready', byIso3: { DEU: 'oops' } } }),
+    null,
+  );
+});

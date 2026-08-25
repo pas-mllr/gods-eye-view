@@ -1045,3 +1045,214 @@ test('getAnalystRecords maps loaded records through the option and empties on di
     harness.cleanup();
   }
 });
+
+test('tp card adds the nearest dated obligation under a fixed clock', () => {
+  const NOW = Date.UTC(2026, 7, 25);
+  assert.deepEqual(localInfrastructureOverlayCopy({
+    name: 'Germany',
+    cbcrRequired: true,
+    masterFileRequired: true,
+    localFileRequired: true,
+    apa: 'unilateral+bilateral',
+    girNextDeadline: '2027-03-31',
+    safeHarbourUntil: '2027-12-31',
+  }, 'local-tp-radar', NOW), {
+    title: 'Germany',
+    details: ['CbCR ✓ · MF/LF ✓ · APA bilateral', 'GIR due 2027-03-31 · 218d'],
+  });
+
+  // No dated obligations → the card is unchanged from the pre-policy shape.
+  assert.deepEqual(localInfrastructureOverlayCopy({
+    name: 'United States',
+    cbcrRequired: true,
+    masterFileRequired: false,
+    localFileRequired: true,
+    apa: 'unilateral+bilateral',
+  }, 'local-tp-radar', NOW).details, ['CbCR ✓ · LF ✓ · APA bilateral']);
+});
+
+test('markerColor option colors stems per record and leaves other layers untouched', async () => {
+  const harness = await createRealLocalLayerHarness({
+    layerOptions: {
+      id: 'local-tp-radar',
+      markerColor: (props) => (props?.name === 'Runtime Dam' ? '#ff4d4d' : null),
+    },
+  });
+  try {
+    const source = harness.dataSources[0];
+    const entity = source.entities.values[0];
+    const red = Cesium.Color.fromCssColorString('#ff4d4d');
+    assert.ok(entity.point.color.getValue(Cesium.JulianDate.now()).equals(red),
+      'point takes the per-record override color');
+    assert.ok(
+      entity.polyline.material.color.getValue(Cesium.JulianDate.now()).equals(red),
+      'stem material takes the override too',
+    );
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});
+
+test('a null markerColor result keeps the layer base color', async () => {
+  const harness = await createRealLocalLayerHarness({
+    layerOptions: { markerColor: () => null },
+  });
+  try {
+    const entity = harness.dataSources[0].entities.values[0];
+    const base = Cesium.Color.fromCssColorString('#0088ff');
+    assert.ok(entity.point.color.getValue(Cesium.JulianDate.now()).equals(base));
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});
+
+test('liveUpdate merges patches in place, reaches analyst records, and degrades honestly', async () => {
+  let payload = { value: 42 };
+  const calls = { live: 0 };
+  const harness = await createRealLocalLayerHarness({
+    layerOptions: {
+      liveUpdate: async () => { calls.live += 1; return payload; },
+      applyLive: (props, data) => (data.value ? { liveValue: data.value, liveSource: 'test-live' } : null),
+      refreshInterval: 60_000,
+      liveSourceLabel: 'TEST · LIVE + BUNDLED',
+      analystRecord: (props, { id, lat, lon }) => ({ id, lat, lon, liveValue: props.liveValue ?? null }),
+    },
+  });
+  try {
+    // The manager runs update() right after enable; the harness only enables,
+    // so drive update() directly like the manager loop would.
+    assert.equal(harness.layer.refreshInterval, 60_000, 'refreshInterval passes through');
+    const first = await harness.layer.update(harness.viewer, {});
+    assert.notEqual(first, false, 'a live success never reads as lifecycle failure');
+    assert.equal(harness.layer.getAnalystRecords()[0].liveValue, 42,
+      'the in-place merge reaches analyst snapshots');
+    let stats = harness.layer.getStats();
+    assert.equal(stats.source, 'TEST · LIVE + BUNDLED', 'chip source flips to the live label');
+    assert.equal(stats.stale, undefined);
+    assert.equal(stats.live.status, 'ready');
+
+    // Later failure: bundled data intact, stale flagged, never error/false.
+    payload = null;
+    const second = await harness.layer.update(harness.viewer, {});
+    assert.notEqual(second, false, 'a live failure never reads as lifecycle failure');
+    stats = harness.layer.getStats();
+    assert.equal(stats.stale, true, 'a lapsed live overlay reports stale');
+    assert.equal(stats.error, null, 'the intact bundled dataset is not an error');
+    assert.equal(harness.layer.getAnalystRecords()[0].liveValue, 42,
+      'the last good merge survives the lapse');
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});
+
+test('a layer whose live feed never succeeds stays plainly bundled', async () => {
+  const harness = await createRealLocalLayerHarness({
+    layerOptions: {
+      liveUpdate: async () => { throw new Error('offline'); },
+      applyLive: () => null,
+      refreshInterval: 60_000,
+      liveSourceLabel: 'TEST · LIVE + BUNDLED',
+    },
+  });
+  try {
+    const outcome = await harness.layer.update(harness.viewer, {});
+    assert.notEqual(outcome, false);
+    const stats = harness.layer.getStats();
+    assert.equal(stats.source, undefined, 'no live label without a live merge');
+    assert.equal(stats.stale, undefined, 'never-live is not stale — it is simply bundled');
+    assert.equal(stats.live.status, 'none');
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});
+
+test('layers without live hooks keep the classic no-op update contract', async () => {
+  const harness = await createRealLocalLayerHarness();
+  try {
+    assert.equal(harness.layer.refreshInterval, 0, 'no hook, no refresh loop');
+    const outcome = await harness.layer.update(harness.viewer, {});
+    assert.notEqual(outcome, false);
+    assert.equal(harness.layer.getStats().live, undefined);
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});
+
+test('reloadOnEnable re-fetches the source so pack edits land on the next toggle', async () => {
+  // The harness restores globalThis.fetch after the first enable, so drive
+  // the layer manually with a swappable fetch via a second harness pattern.
+  const originalFetch = globalThis.fetch;
+  const originalWindow = globalThis.window;
+  globalThis.window = { dispatchEvent() {} };
+  let packVersion = 1;
+  // Polygon geometry like the main harness fixture: Cesium's Point marker
+  // path needs a DOM canvas (pin builder), which node:test does not have.
+  globalThis.fetch = async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify({
+      type: 'Feature',
+      id: `entity-v${packVersion}`,
+      properties: { name: `Entity v${packVersion}` },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [[[4.90, 52.37], [4.91, 52.37], [4.91, 52.38], [4.90, 52.37]]],
+      },
+    }),
+  });
+  const dataSources = [];
+  const viewer = {
+    selectedEntity: undefined,
+    dataSources: {
+      add(ds) { dataSources.push(ds); return ds; },
+      remove(ds) { const i = dataSources.indexOf(ds); if (i >= 0) dataSources.splice(i, 1); return i >= 0; },
+    },
+    camera: {
+      positionWC: Cesium.Cartesian3.fromDegrees(4.9, 52.37, 100_000),
+      frustum: { fov: Math.PI / 3 },
+      moveEnd: new MockLayerEvent(),
+      flyTo() {},
+    },
+    scene: {
+      canvas: { clientWidth: 800, clientHeight: 600 },
+      preRender: new MockLayerEvent(),
+      sampleHeightSupported: false,
+      sampleHeight() { throw new Error('n/a'); },
+      screenSpaceCameraController: { enableInputs: true },
+      pick() { return null; },
+      requestRender() {},
+    },
+  };
+  const layer = createLocalGeoJsonLayer({
+    id: 'entity-footprint',
+    url: '/api/entity-footprint/entities.geojsonl',
+    name: 'Reload Test',
+    color: '#7fd4ff',
+    reloadOnEnable: true,
+    analystRecord: (props, { id }) => ({ id, name: props?.name ?? null }),
+    overlayHost: { setVisible() {}, setEntries() {}, clearSource() {} },
+    projectToWindow: () => ({ x: 400, y: 300 }),
+    screenSpaceEventHandlerFactory: () => ({ setInputAction() {}, destroy() {} }),
+  });
+  try {
+    await layer.enable(viewer);
+    assert.equal(layer.getAnalystRecords()[0].name, 'Entity v1');
+
+    packVersion = 2;
+    layer.disable(viewer);
+    await layer.enable(viewer);
+    assert.equal(layer.getAnalystRecords()[0].name, 'Entity v2',
+      'the edited pack is re-fetched on the next enable');
+    assert.equal(dataSources.length, 1, 'the stale source was removed, not stacked');
+  } finally {
+    layer.destroy(viewer);
+    globalThis.fetch = originalFetch;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+});

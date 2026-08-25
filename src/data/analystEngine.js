@@ -34,16 +34,64 @@ export const ANALYST_LAYERS = {
   'local-firms': { numeric: ['frp'], text: ['confidence', 'satellite'], flags: [] },
   earthquakes: { numeric: ['magnitude', 'depthKm'], text: ['place'], flags: [] },
   'local-tp-radar': {
-    numeric: ['cbcrThresholdEur', 'citRate'],
-    text: ['name', 'iso2', 'tpDeadline', 'apa', 'oecdAlignment'],
+    numeric: ['cbcrThresholdEur', 'citRate', 'daysToGirDeadline'],
+    text: ['name', 'iso2', 'tpDeadline', 'apa', 'oecdAlignment', 'pillarTwoStatus', 'safeHarbourUntil', 'eInvoicingPhase', 'eInvoicingFrom', 'girNextDeadline', 'citRateSource'],
     flags: ['tpDocRequired', 'masterFileRequired', 'localFileRequired', 'cbcrRequired', 'apaBilateral', 'mapAvailable'],
   },
   'local-tax-disputes': {
     numeric: ['mapInventoryTp', 'mapNewCasesTp', 'mapAvgMonthsTp', 'treatyCount', 'whtDividendPct', 'whtInterestPct', 'whtRoyaltyPct'],
-    text: ['name', 'iso2', 'auditIntensity', 'auditFocus'],
+    text: ['name', 'iso2', 'auditIntensity', 'auditFocus', 'mapStatsSource'],
     flags: ['arbitrationAvailable', 'icapMember', 'mliSigned', 'participationExemption'],
   },
+  'tax-events': {
+    numeric: ['articleCount', 'ageHours'],
+    text: ['name', 'iso2', 'latestTitle'],
+    flags: [],
+  },
+  'entity-footprint': {
+    numeric: ['riskScore', 'citRate', 'headcount', 'daysToSafeHarbourEnd', 'mapAvgMonthsTp'],
+    text: ['name', 'iso2', 'role', 'riskBand', 'pillarTwoStatus', 'auditIntensity'],
+    flags: ['ipOwner', 'financing'],
+  },
+  'tax-flows': {
+    numeric: ['annualValueEur'],
+    text: ['name', 'flowType', 'fromEntity', 'toEntity', 'fromIso2', 'toIso2', 'pricingMethod'],
+    flags: ['crossBorder'],
+  },
 };
+
+/**
+ * Identity/routing fields every compact voice-payload item may carry
+ * regardless of layer: `id` is a display label, so the stable lookup keys
+ * (icao24/mmsi/registration) must ride along for track_entity, and
+ * distanceKm is stamped by nearest-first sorts.
+ */
+export const COMPACT_IDENTITY_FIELDS = Object.freeze([
+  'icao24', 'mmsi', 'registration', 'label', 'callsign', 'distanceKm',
+]);
+
+const _compactFieldsByLayer = new Map();
+
+/**
+ * The compact voice-payload field set for one layer: identity fields plus
+ * everything the layer's ANALYST_LAYERS schema declares. Replaces the old
+ * flat global whitelist so new layers' fields ride along automatically
+ * instead of growing one unstructured list. Memoized per layer key.
+ * @param {string} layerKey
+ * @returns {Set<string>}
+ */
+export function compactFieldsForLayer(layerKey) {
+  let fields = _compactFieldsByLayer.get(layerKey);
+  if (!fields) {
+    fields = new Set(COMPACT_IDENTITY_FIELDS);
+    const schema = ANALYST_LAYERS[layerKey];
+    if (schema) {
+      for (const field of [...schema.numeric, ...schema.text, ...schema.flags]) fields.add(field);
+    }
+    _compactFieldsByLayer.set(layerKey, fields);
+  }
+  return fields;
+}
 
 const EARTH_R_KM = 6371;
 

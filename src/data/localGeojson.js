@@ -3,6 +3,7 @@ import { governorRequestRender } from '../renderGovernor.js';
 import {
   clearSelectedEntityContextForLayer,
   registerEntityContext,
+  removeEntityContextsForLayer,
   selectEntityContext,
 } from './contextStore.js';
 import {
@@ -10,6 +11,7 @@ import {
   setOverlayEntries,
   setOverlaySourceVisible,
 } from '../overlays/worldOverlay.js';
+import { deadlineUrgency, obligationCardLine } from './taxPolicy.js';
 
 const DEFAULT_LABEL_MAX = 900;
 const DEFAULT_LABEL_GRID_PX = 132;
@@ -50,13 +52,25 @@ const DEFAULT_OVERLAY_HOST = Object.freeze({
   setVisible: setOverlaySourceVisible,
 });
 
+/** css string → Cesium.Color memo — fromCssColorString is not cheap at scale. */
+const _cssColorCache = new Map();
+
+function cesiumColorFromCss(css) {
+  let color = _cssColorCache.get(css);
+  if (!color) {
+    color = Cesium.Color.fromCssColorString(css);
+    _cssColorCache.set(css, color);
+  }
+  return color;
+}
+
 /**
  * Build the validated local-infrastructure card copy.
  * @param {object} properties Unwrapped GeoJSON feature properties.
  * @param {string} layerId Local layer id.
  * @returns {{title:string,details:string[]}}
  */
-export function localInfrastructureOverlayCopy(properties, layerId) {
+export function localInfrastructureOverlayCopy(properties, layerId, nowMs = Date.now()) {
   const props = unwrapProperties(properties) || {};
   const tags = props.tags || {};
   const title = featureLabelFromProperties(props, layerId);
@@ -98,6 +112,10 @@ export function localInfrastructureOverlayCopy(properties, layerId) {
     const apa = cleanLabel(props.apa);
     if (apa && apa !== 'none') parts.push(`APA ${apa === 'unilateral+bilateral' ? 'bilateral' : apa}`);
     if (parts.length) details.push(clampCardLine(parts.join(' · ')));
+    // Nearest dated obligation, e.g. "GIR due 2027-03-31 · 218d" — the card
+    // half of the deadline-urgency rendering (the stem color is the other).
+    const obligation = obligationCardLine(props, nowMs);
+    if (obligation) details.push(clampCardLine(obligation));
   } else if (layerId === 'local-tax-disputes') {
     const parts = [];
     // Strict check: Number(null) is 0, and a null MAP figure means "no
@@ -106,6 +124,15 @@ export function localInfrastructureOverlayCopy(properties, layerId) {
     const audit = cleanLabel(props.auditIntensity);
     if (audit) parts.push(`audit ${audit}`);
     if (parts.length) details.push(clampCardLine(parts.join(' · ')));
+  } else if (layerId === 'entity-footprint') {
+    const line = [cleanLabel(props.role), cleanLabel(props.jurisdictionName) || cleanLabel(props.jurisdiction)]
+      .filter(Boolean).join(' · ');
+    if (line) details.push(clampCardLine(line));
+    // The PREDICTED prefix is the honesty contract for the risk overlay —
+    // this score is an editorial weighting, and it must never render bare.
+    if (Number.isFinite(props.riskScore) && props.riskBand) {
+      details.push(clampCardLine(`PREDICTED risk ${props.riskScore} · ${props.riskBand}`));
+    }
   }
 
   return { title, details };
@@ -304,6 +331,12 @@ export function createLocalGeoJsonLayer({
   labelMax = DEFAULT_LABEL_MAX,
   labelGridPx = DEFAULT_LABEL_GRID_PX,
   analystRecord = null,
+  markerColor = null,
+  liveUpdate = null,
+  applyLive = null,
+  refreshInterval = 0,
+  liveSourceLabel = null,
+  reloadOnEnable = false,
   overlayHost = DEFAULT_OVERLAY_HOST,
   screenSpaceEventHandlerFactory = (canvas) => new Cesium.ScreenSpaceEventHandler(canvas),
   projectToWindow = (scene, position) => Cesium.SceneTransforms.worldToWindowCoordinates(scene, position),
@@ -322,6 +355,10 @@ export function createLocalGeoJsonLayer({
   let _stemGeometryDirty = true;
   let _lastVisibilityUpdate = 0;
   let _destroyed = false;
+  /** @type {number|null} Timestamp of the last successful live-data merge. */
+  let _liveAt = null;
+  /** True when a live merge succeeded earlier this session but the latest failed. */
+  let _liveStale = false;
   let _groundRetryTimer = null;
   /** Consecutive self-armed retries since the last grounding/camera motion. */
   let _groundRetryArms = 0;
@@ -394,24 +431,71 @@ export function createLocalGeoJsonLayer({
     icon,
     source,
     updateInterval: 0,
+    // Layers with a liveUpdate hook opt into a slow data-refresh loop; without
+    // one this stays 0 and the manager arms only the stats-repaint interval.
+    // NOTE: a non-zero refreshInterval REPLACES the 1 s repaint (manager
+    // if/else) — fine here, every state transition repaints the panel anyway.
+    refreshInterval: typeof liveUpdate === 'function' ? refreshInterval : 0,
     statsRefreshInterval: 1000,
 
     init: async (viewer) => {
       // DataLayerManager calls this once
     },
-    
-    update: async (viewer) => {
-      // DataLayerManager calls this when enabled
+
+    /**
+     * Merge live data over the bundled records through the opt-in
+     * liveUpdate/applyLive hooks. ALWAYS resolves truthy: a live-feed failure
+     * degrades to the intact bundled snapshot (surfaced via getStats().stale
+     * once a merge has succeeded before), never a failed enable — the manager
+     * treats `update() === false` as a lifecycle rejection.
+     */
+    update: async (viewer, { signal } = {}) => {
+      if (typeof liveUpdate !== 'function' || typeof applyLive !== 'function') return true;
+      if (!_enabled || !_dataSource) return true;
+      let payload = null;
+      try {
+        payload = await liveUpdate({ signal });
+      } catch {
+        payload = null;
+      }
+      if (!payload) {
+        _liveStale = Boolean(_liveAt);
+        return true;
+      }
+      for (const record of _stemRecords) {
+        const patch = applyLive(record.properties || {}, payload);
+        if (!patch || typeof patch !== 'object') continue;
+        // In-place on purpose: context cards and analyst snapshots hold the
+        // same properties object, so the merge reaches them without rewiring.
+        Object.assign(record.properties, patch);
+        if (record.entry) {
+          const copy = localInfrastructureOverlayCopy(record.properties, id);
+          record.entry.title = copy.title;
+          record.entry.details = copy.details;
+        }
+      }
+      _liveAt = Date.now();
+      _liveStale = false;
+      governorRequestRender(`local-live-merge:${id}`);
+      return true;
     },
-    
+
     /**
      * @returns {{count:number, lastUpdate:number|null, error:string|null}}
      *   A dead layer must be distinguishable from an empty one: a failed load
      *   surfaces `error` (manager chip → UNAVAILABLE) instead of reporting a
-     *   silent zero count as nominal.
+     *   silent zero count as nominal. Live-merge state rides along without
+     *   ever masking the bundled dataset's own health: a live failure is
+     *   `stale`, never `error` — the snapshot underneath is intact.
      */
     getStats: () => {
-      return { count: _count, lastUpdate: _lastUpdate, error: _error };
+      const stats = { count: _count, lastUpdate: _lastUpdate, error: _error };
+      if (typeof liveUpdate === 'function') {
+        if (_liveAt && liveSourceLabel) stats.source = liveSourceLabel;
+        if (_liveStale) stats.stale = true;
+        stats.live = { status: _liveAt ? 'ready' : 'none', at: _liveAt };
+      }
+      return stats;
     },
 
     /**
@@ -447,6 +531,20 @@ export function createLocalGeoJsonLayer({
       _groundRetryArms = 0; // fresh give-up budget per enable-cycle
       _lastGroundSampleCapability = null;
       _overlayPublisher.show();
+
+      // Config-pack layers (env-pointed sources like the entity footprint)
+      // opt into a re-fetch on every enable so pack edits land on the next
+      // toggle. The cached source and its context records are torn down
+      // FIRST — stale records would keep removed entities voice-selectable.
+      if (reloadOnEnable && _dataSource) {
+        removeEntityContextsForLayer(id);
+        try { viewer?.dataSources?.remove(_dataSource, true); } catch { /* already gone */ }
+        _dataSource = null;
+        _stemRecords = [];
+        _count = 0;
+        _liveAt = null;
+        _liveStale = false;
+      }
 
       // 1. Initialize data source
       if (!_dataSource) {
@@ -537,6 +635,12 @@ export function createLocalGeoJsonLayer({
             const tip = Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, tipHeight);
             const properties = propertyObject(feature);
             const recordId = String(feature.id ?? i);
+            // Opt-in per-record color (e.g. deadline urgency, risk band).
+            // Resolved ONCE per load — a threshold crossed mid-session does not
+            // recolor until the layer reloads; the policy callback stays pure.
+            const overrideCss = typeof markerColor === 'function' ? markerColor(properties) : null;
+            const recordColor = overrideCss ? cesiumColorFromCss(overrideCss) : baseColor;
+            const recordCss = overrideCss || color;
 
             // Store references for bounded stem scaling and native picking.
             feature.__localBaseCarto = carto;
@@ -561,11 +665,11 @@ export function createLocalGeoJsonLayer({
             feature.polyline = new Cesium.PolylineGraphics({
               positions: stemPositionBuffers[0],
               width: 3.5,
-              material: new Cesium.ColorMaterialProperty(baseColor),
+              material: new Cesium.ColorMaterialProperty(recordColor),
             });
             feature.point = new Cesium.PointGraphics({
               pixelSize: 10,
-              color: baseColor,
+              color: recordColor,
               outlineColor: Cesium.Color.BLACK,
               outlineWidth: 2,
               // Never depth-cull the anchor against the photoreal mesh —
@@ -594,7 +698,7 @@ export function createLocalGeoJsonLayer({
                 position: tip,
                 properties,
                 priority,
-                accent: color,
+                accent: recordCss,
               }) : null,
             });
           }
@@ -784,6 +888,8 @@ export function createLocalGeoJsonLayer({
       _count = 0;
       _lastUpdate = null;
       _error = null;
+      _liveAt = null;
+      _liveStale = false;
     }
   };
 }
@@ -875,7 +981,7 @@ function featureLabelFromProperties(props, layerId) {
   return clampLabel(text || layerTitle(layerId));
 }
 
-function labelPriorityFromProperties(props, layerId) {
+function labelPriorityFromProperties(props, layerId, nowMs = Date.now()) {
   const tags = props.tags || {};
 
   let score = 0;
@@ -885,6 +991,17 @@ function labelPriorityFromProperties(props, layerId) {
   if (props.output || tags['plant:output:electricity']) score += 120;
   if (layerId === 'local-dams') score += 80;
   if (layerId === 'local-datacenters') score += 60;
+  if (layerId === 'local-tp-radar') {
+    // Imminent/overdue obligations win label slots over quiet jurisdictions.
+    const { band } = deadlineUrgency(props, nowMs);
+    if (band === 'overdue' || band === 'imminent') score += 200;
+    else if (band === 'upcoming') score += 80;
+  }
+  if (layerId === 'entity-footprint') {
+    // Hot entities win label slots over quiet subsidiaries.
+    if (props.riskBand === 'very-high') score += 200;
+    else if (props.riskBand === 'high') score += 100;
+  }
   return score;
 }
 
@@ -933,5 +1050,6 @@ function layerTitle(layerId) {
   if (layerId === 'local-dams') return 'Dam';
   if (layerId === 'local-tp-radar') return 'TP Jurisdiction';
   if (layerId === 'local-tax-disputes') return 'Tax Disputes Jurisdiction';
+  if (layerId === 'entity-footprint') return 'Group Entity';
   return 'Feature';
 }
