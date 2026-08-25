@@ -1045,3 +1045,65 @@ test('getAnalystRecords maps loaded records through the option and empties on di
     harness.cleanup();
   }
 });
+
+test('tp card adds the nearest dated obligation under a fixed clock', () => {
+  const NOW = Date.UTC(2026, 7, 25);
+  assert.deepEqual(localInfrastructureOverlayCopy({
+    name: 'Germany',
+    cbcrRequired: true,
+    masterFileRequired: true,
+    localFileRequired: true,
+    apa: 'unilateral+bilateral',
+    girNextDeadline: '2027-03-31',
+    safeHarbourUntil: '2027-12-31',
+  }, 'local-tp-radar', NOW), {
+    title: 'Germany',
+    details: ['CbCR ✓ · MF/LF ✓ · APA bilateral', 'GIR due 2027-03-31 · 218d'],
+  });
+
+  // No dated obligations → the card is unchanged from the pre-policy shape.
+  assert.deepEqual(localInfrastructureOverlayCopy({
+    name: 'United States',
+    cbcrRequired: true,
+    masterFileRequired: false,
+    localFileRequired: true,
+    apa: 'unilateral+bilateral',
+  }, 'local-tp-radar', NOW).details, ['CbCR ✓ · LF ✓ · APA bilateral']);
+});
+
+test('markerColor option colors stems per record and leaves other layers untouched', async () => {
+  const harness = await createRealLocalLayerHarness({
+    layerOptions: {
+      id: 'local-tp-radar',
+      markerColor: (props) => (props?.name === 'Runtime Dam' ? '#ff4d4d' : null),
+    },
+  });
+  try {
+    const source = harness.dataSources[0];
+    const entity = source.entities.values[0];
+    const red = Cesium.Color.fromCssColorString('#ff4d4d');
+    assert.ok(entity.point.color.getValue(Cesium.JulianDate.now()).equals(red),
+      'point takes the per-record override color');
+    assert.ok(
+      entity.polyline.material.color.getValue(Cesium.JulianDate.now()).equals(red),
+      'stem material takes the override too',
+    );
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});
+
+test('a null markerColor result keeps the layer base color', async () => {
+  const harness = await createRealLocalLayerHarness({
+    layerOptions: { markerColor: () => null },
+  });
+  try {
+    const entity = harness.dataSources[0].entities.values[0];
+    const base = Cesium.Color.fromCssColorString('#0088ff');
+    assert.ok(entity.point.color.getValue(Cesium.JulianDate.now()).equals(base));
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});

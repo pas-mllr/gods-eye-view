@@ -8,6 +8,8 @@
  * guards against drift in either direction.
  */
 
+import { daysUntil } from './taxPolicy.js';
+
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
   const numeric = Number(value);
@@ -28,10 +30,12 @@ function textOrNull(value) {
 /**
  * Map one TP Radar feature's properties into a flat analyst record.
  * @param {object} props Unwrapped GeoJSON properties.
- * @param {{id?: string, lat?: number, lon?: number}} [anchor] Record identity/position.
+ * @param {{id?: string, lat?: number, lon?: number, nowMs?: number}} [anchor]
+ *   Record identity/position; nowMs is an injectable clock for the derived
+ *   daysToGirDeadline field (tests pass a fixed value).
  * @returns {object|null}
  */
-export function mapTpAnalystRecord(props, { id, lat, lon } = {}) {
+export function mapTpAnalystRecord(props, { id, lat, lon, nowMs = Date.now() } = {}) {
   if (!props || typeof props !== 'object') return null;
   return {
     id: textOrNull(props.name) || String(id ?? ''),
@@ -50,6 +54,15 @@ export function mapTpAnalystRecord(props, { id, lat, lon } = {}) {
     cbcrRequired: boolOrNull(props.cbcrRequired),
     apaBilateral: boolOrNull(props.apaBilateral),
     mapAvailable: boolOrNull(props.mapAvailable),
+    pillarTwoStatus: textOrNull(props.pillarTwoStatus),
+    safeHarbourUntil: textOrNull(props.safeHarbourUntil),
+    eInvoicingPhase: textOrNull(props.eInvoicingPhase),
+    eInvoicingFrom: textOrNull(props.eInvoicingFrom),
+    girNextDeadline: textOrNull(props.girNextDeadline),
+    // Numeric companion so gt/lt filters work (ISO strings don't compare
+    // numerically in the engine's applyFilter).
+    daysToGirDeadline: daysUntil(props.girNextDeadline, nowMs),
+    citRateSource: textOrNull(props.citRateSource) || 'bundled',
   };
 }
 

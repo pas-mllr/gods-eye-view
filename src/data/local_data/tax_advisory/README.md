@@ -32,6 +32,16 @@ curation time and change only when these files are refreshed.
 - **`citRate`** is the headline corporate income tax rate (combined
   central+sub-central where that is the usual quoted figure).
 - `null` means no reliable public figure was available at curation time.
+- **Dated policy-state fields** (`tp_radar.geojsonl` only, curated 2026-08):
+  `pillarTwoStatus` (`enacted|qdmtt-only|draft|announced|none`) summarizes GloBE
+  adoption; `safeHarbourUntil` approximates the end of the last calendar FY
+  covered by the transitional CbCR safe harbour; `girNextDeadline` approximates
+  the next GloBE Information Return deadline for a calendar-year group under
+  the jurisdiction's adoption timing (15/18-month rules); `eInvoicingPhase`
+  (`none|announced|voluntary|mandatory`) and `eInvoicingFrom` summarize the
+  B2B e-invoicing / CTC mandate state. All are curated approximations of
+  moving regimes — phase-in thresholds, non-calendar year-ends, and later
+  guidance are not modeled. Verify before reliance.
 
 ## Geometry
 

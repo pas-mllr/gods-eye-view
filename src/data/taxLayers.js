@@ -1,6 +1,7 @@
 import { createLocalGeoJsonLayer } from './localGeojson.js';
 import { setRegionalBriefTopicSource } from './regionalBrief.js';
 import { mapTpAnalystRecord, mapDisputesAnalystRecord } from './taxAnalystRecords.js';
+import { deadlineUrgency } from './taxPolicy.js';
 
 // Use Vite's ?url import to properly resolve these assets in dev and build
 import tpRadarUrl from './local_data/tax_advisory/tp_radar.geojsonl?url';
@@ -57,6 +58,9 @@ export const tpRadarLayer = withTaxNewsTopic(createLocalGeoJsonLayer({
   labelMax: 200,
   labelGridPx: 150,
   analystRecord: mapTpAnalystRecord,
+  // Deadline-urgency stems: overdue red / imminent amber-orange / upcoming
+  // yellow, from the record's dated obligations; null keeps the layer amber.
+  markerColor: (props) => deadlineUrgency(props, Date.now()).color,
 }));
 
 export const taxDisputesLayer = withTaxNewsTopic(createLocalGeoJsonLayer({

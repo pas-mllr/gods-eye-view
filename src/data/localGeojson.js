@@ -10,6 +10,7 @@ import {
   setOverlayEntries,
   setOverlaySourceVisible,
 } from '../overlays/worldOverlay.js';
+import { deadlineUrgency, obligationCardLine } from './taxPolicy.js';
 
 const DEFAULT_LABEL_MAX = 900;
 const DEFAULT_LABEL_GRID_PX = 132;
@@ -50,13 +51,25 @@ const DEFAULT_OVERLAY_HOST = Object.freeze({
   setVisible: setOverlaySourceVisible,
 });
 
+/** css string → Cesium.Color memo — fromCssColorString is not cheap at scale. */
+const _cssColorCache = new Map();
+
+function cesiumColorFromCss(css) {
+  let color = _cssColorCache.get(css);
+  if (!color) {
+    color = Cesium.Color.fromCssColorString(css);
+    _cssColorCache.set(css, color);
+  }
+  return color;
+}
+
 /**
  * Build the validated local-infrastructure card copy.
  * @param {object} properties Unwrapped GeoJSON feature properties.
  * @param {string} layerId Local layer id.
  * @returns {{title:string,details:string[]}}
  */
-export function localInfrastructureOverlayCopy(properties, layerId) {
+export function localInfrastructureOverlayCopy(properties, layerId, nowMs = Date.now()) {
   const props = unwrapProperties(properties) || {};
   const tags = props.tags || {};
   const title = featureLabelFromProperties(props, layerId);
@@ -98,6 +111,10 @@ export function localInfrastructureOverlayCopy(properties, layerId) {
     const apa = cleanLabel(props.apa);
     if (apa && apa !== 'none') parts.push(`APA ${apa === 'unilateral+bilateral' ? 'bilateral' : apa}`);
     if (parts.length) details.push(clampCardLine(parts.join(' · ')));
+    // Nearest dated obligation, e.g. "GIR due 2027-03-31 · 218d" — the card
+    // half of the deadline-urgency rendering (the stem color is the other).
+    const obligation = obligationCardLine(props, nowMs);
+    if (obligation) details.push(clampCardLine(obligation));
   } else if (layerId === 'local-tax-disputes') {
     const parts = [];
     // Strict check: Number(null) is 0, and a null MAP figure means "no
@@ -304,6 +321,7 @@ export function createLocalGeoJsonLayer({
   labelMax = DEFAULT_LABEL_MAX,
   labelGridPx = DEFAULT_LABEL_GRID_PX,
   analystRecord = null,
+  markerColor = null,
   overlayHost = DEFAULT_OVERLAY_HOST,
   screenSpaceEventHandlerFactory = (canvas) => new Cesium.ScreenSpaceEventHandler(canvas),
   projectToWindow = (scene, position) => Cesium.SceneTransforms.worldToWindowCoordinates(scene, position),
@@ -537,6 +555,12 @@ export function createLocalGeoJsonLayer({
             const tip = Cesium.Cartesian3.fromRadians(carto.longitude, carto.latitude, tipHeight);
             const properties = propertyObject(feature);
             const recordId = String(feature.id ?? i);
+            // Opt-in per-record color (e.g. deadline urgency, risk band).
+            // Resolved ONCE per load — a threshold crossed mid-session does not
+            // recolor until the layer reloads; the policy callback stays pure.
+            const overrideCss = typeof markerColor === 'function' ? markerColor(properties) : null;
+            const recordColor = overrideCss ? cesiumColorFromCss(overrideCss) : baseColor;
+            const recordCss = overrideCss || color;
 
             // Store references for bounded stem scaling and native picking.
             feature.__localBaseCarto = carto;
@@ -561,11 +585,11 @@ export function createLocalGeoJsonLayer({
             feature.polyline = new Cesium.PolylineGraphics({
               positions: stemPositionBuffers[0],
               width: 3.5,
-              material: new Cesium.ColorMaterialProperty(baseColor),
+              material: new Cesium.ColorMaterialProperty(recordColor),
             });
             feature.point = new Cesium.PointGraphics({
               pixelSize: 10,
-              color: baseColor,
+              color: recordColor,
               outlineColor: Cesium.Color.BLACK,
               outlineWidth: 2,
               // Never depth-cull the anchor against the photoreal mesh —
@@ -594,7 +618,7 @@ export function createLocalGeoJsonLayer({
                 position: tip,
                 properties,
                 priority,
-                accent: color,
+                accent: recordCss,
               }) : null,
             });
           }
@@ -875,7 +899,7 @@ function featureLabelFromProperties(props, layerId) {
   return clampLabel(text || layerTitle(layerId));
 }
 
-function labelPriorityFromProperties(props, layerId) {
+function labelPriorityFromProperties(props, layerId, nowMs = Date.now()) {
   const tags = props.tags || {};
 
   let score = 0;
@@ -885,6 +909,12 @@ function labelPriorityFromProperties(props, layerId) {
   if (props.output || tags['plant:output:electricity']) score += 120;
   if (layerId === 'local-dams') score += 80;
   if (layerId === 'local-datacenters') score += 60;
+  if (layerId === 'local-tp-radar') {
+    // Imminent/overdue obligations win label slots over quiet jurisdictions.
+    const { band } = deadlineUrgency(props, nowMs);
+    if (band === 'overdue' || band === 'imminent') score += 200;
+    else if (band === 'upcoming') score += 80;
+  }
   return score;
 }
 

@@ -34,8 +34,8 @@ export const ANALYST_LAYERS = {
   'local-firms': { numeric: ['frp'], text: ['confidence', 'satellite'], flags: [] },
   earthquakes: { numeric: ['magnitude', 'depthKm'], text: ['place'], flags: [] },
   'local-tp-radar': {
-    numeric: ['cbcrThresholdEur', 'citRate'],
-    text: ['name', 'iso2', 'tpDeadline', 'apa', 'oecdAlignment'],
+    numeric: ['cbcrThresholdEur', 'citRate', 'daysToGirDeadline'],
+    text: ['name', 'iso2', 'tpDeadline', 'apa', 'oecdAlignment', 'pillarTwoStatus', 'safeHarbourUntil', 'eInvoicingPhase', 'eInvoicingFrom', 'girNextDeadline', 'citRateSource'],
     flags: ['tpDocRequired', 'masterFileRequired', 'localFileRequired', 'cbcrRequired', 'apaBilateral', 'mapAvailable'],
   },
   'local-tax-disputes': {
