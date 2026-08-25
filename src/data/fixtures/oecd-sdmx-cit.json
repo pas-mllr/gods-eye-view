@@ -1,0 +1,27 @@
+{
+  "meta": { "schema": "https://json.sdmx.org/2.0/sdmx-json-data-schema.json" },
+  "data": {
+    "structures": [
+      {
+        "dimensions": {
+          "series": [
+            { "id": "MEASURE", "values": [{ "id": "CIT_RATE" }] },
+            { "id": "REF_AREA", "values": [{ "id": "DEU" }, { "id": "USA" }, { "id": "IRL" }] }
+          ],
+          "observation": [
+            { "id": "TIME_PERIOD", "values": [{ "id": "2024" }, { "id": "2025" }] }
+          ]
+        }
+      }
+    ],
+    "dataSets": [
+      {
+        "series": {
+          "0:0": { "observations": { "0": [29.94], "1": [29.83] } },
+          "0:1": { "observations": { "0": [21.0] } },
+          "0:2": { "observations": { "1": [12.5] } }
+        }
+      }
+    ]
+  }
+}

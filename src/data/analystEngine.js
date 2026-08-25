@@ -40,7 +40,7 @@ export const ANALYST_LAYERS = {
   },
   'local-tax-disputes': {
     numeric: ['mapInventoryTp', 'mapNewCasesTp', 'mapAvgMonthsTp', 'treatyCount', 'whtDividendPct', 'whtInterestPct', 'whtRoyaltyPct'],
-    text: ['name', 'iso2', 'auditIntensity', 'auditFocus'],
+    text: ['name', 'iso2', 'auditIntensity', 'auditFocus', 'mapStatsSource'],
     flags: ['arbitrationAvailable', 'icapMember', 'mliSigned', 'participationExemption'],
   },
 };

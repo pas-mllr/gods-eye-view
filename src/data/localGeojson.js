@@ -322,6 +322,10 @@ export function createLocalGeoJsonLayer({
   labelGridPx = DEFAULT_LABEL_GRID_PX,
   analystRecord = null,
   markerColor = null,
+  liveUpdate = null,
+  applyLive = null,
+  refreshInterval = 0,
+  liveSourceLabel = null,
   overlayHost = DEFAULT_OVERLAY_HOST,
   screenSpaceEventHandlerFactory = (canvas) => new Cesium.ScreenSpaceEventHandler(canvas),
   projectToWindow = (scene, position) => Cesium.SceneTransforms.worldToWindowCoordinates(scene, position),
@@ -340,6 +344,10 @@ export function createLocalGeoJsonLayer({
   let _stemGeometryDirty = true;
   let _lastVisibilityUpdate = 0;
   let _destroyed = false;
+  /** @type {number|null} Timestamp of the last successful live-data merge. */
+  let _liveAt = null;
+  /** True when a live merge succeeded earlier this session but the latest failed. */
+  let _liveStale = false;
   let _groundRetryTimer = null;
   /** Consecutive self-armed retries since the last grounding/camera motion. */
   let _groundRetryArms = 0;
@@ -412,24 +420,71 @@ export function createLocalGeoJsonLayer({
     icon,
     source,
     updateInterval: 0,
+    // Layers with a liveUpdate hook opt into a slow data-refresh loop; without
+    // one this stays 0 and the manager arms only the stats-repaint interval.
+    // NOTE: a non-zero refreshInterval REPLACES the 1 s repaint (manager
+    // if/else) — fine here, every state transition repaints the panel anyway.
+    refreshInterval: typeof liveUpdate === 'function' ? refreshInterval : 0,
     statsRefreshInterval: 1000,
 
     init: async (viewer) => {
       // DataLayerManager calls this once
     },
-    
-    update: async (viewer) => {
-      // DataLayerManager calls this when enabled
+
+    /**
+     * Merge live data over the bundled records through the opt-in
+     * liveUpdate/applyLive hooks. ALWAYS resolves truthy: a live-feed failure
+     * degrades to the intact bundled snapshot (surfaced via getStats().stale
+     * once a merge has succeeded before), never a failed enable — the manager
+     * treats `update() === false` as a lifecycle rejection.
+     */
+    update: async (viewer, { signal } = {}) => {
+      if (typeof liveUpdate !== 'function' || typeof applyLive !== 'function') return true;
+      if (!_enabled || !_dataSource) return true;
+      let payload = null;
+      try {
+        payload = await liveUpdate({ signal });
+      } catch {
+        payload = null;
+      }
+      if (!payload) {
+        _liveStale = Boolean(_liveAt);
+        return true;
+      }
+      for (const record of _stemRecords) {
+        const patch = applyLive(record.properties || {}, payload);
+        if (!patch || typeof patch !== 'object') continue;
+        // In-place on purpose: context cards and analyst snapshots hold the
+        // same properties object, so the merge reaches them without rewiring.
+        Object.assign(record.properties, patch);
+        if (record.entry) {
+          const copy = localInfrastructureOverlayCopy(record.properties, id);
+          record.entry.title = copy.title;
+          record.entry.details = copy.details;
+        }
+      }
+      _liveAt = Date.now();
+      _liveStale = false;
+      governorRequestRender(`local-live-merge:${id}`);
+      return true;
     },
-    
+
     /**
      * @returns {{count:number, lastUpdate:number|null, error:string|null}}
      *   A dead layer must be distinguishable from an empty one: a failed load
      *   surfaces `error` (manager chip → UNAVAILABLE) instead of reporting a
-     *   silent zero count as nominal.
+     *   silent zero count as nominal. Live-merge state rides along without
+     *   ever masking the bundled dataset's own health: a live failure is
+     *   `stale`, never `error` — the snapshot underneath is intact.
      */
     getStats: () => {
-      return { count: _count, lastUpdate: _lastUpdate, error: _error };
+      const stats = { count: _count, lastUpdate: _lastUpdate, error: _error };
+      if (typeof liveUpdate === 'function') {
+        if (_liveAt && liveSourceLabel) stats.source = liveSourceLabel;
+        if (_liveStale) stats.stale = true;
+        stats.live = { status: _liveAt ? 'ready' : 'none', at: _liveAt };
+      }
+      return stats;
     },
 
     /**
@@ -808,6 +863,8 @@ export function createLocalGeoJsonLayer({
       _count = 0;
       _lastUpdate = null;
       _error = null;
+      _liveAt = null;
+      _liveStale = false;
     }
   };
 }

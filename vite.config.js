@@ -51,6 +51,7 @@ import {
   normalizeRegionalWeather,
 } from './src/data/regionalBrief.js';
 import { normalizeAdsbLolPointResponse } from './src/data/adsbLolFallback.js';
+import { normalizeOecdTaxPayload } from './src/data/oecdSdmx.js';
 import { createAisStreamAdapter, isRecognizedAisEnvelope } from './src/data/aisStreamAdapter.js';
 import { parseSilenceTimeoutEnv } from './src/data/aisWatchdog.js';
 import {
@@ -1711,6 +1712,149 @@ function rocketLaunchesProxy() {
 
   return {
     name: 'rocket-launches-proxy',
+    configureServer(server) {
+      install(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      install(server.middlewares);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// OECD tax data proxy (/api/oecd-tax)
+//
+// Live jurisdiction figures for the tax advisory layers: statutory CIT rates
+// and MAP caseloads from the OECD SDMX API, normalized server-side by the
+// pure src/data/oecdSdmx.js walker into two independent sub-feeds. Both
+// dataflow ids and keys are env-tunable because the OECD occasionally
+// reshuffles dataflow identifiers — a wrong default is a .env fix, and until
+// then the layers honestly keep their BUNDLED figures (the client treats an
+// unavailable sub-feed as "no live overlay", never an error).
+
+export const OECD_TAX_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Build one SDMX data URL from env-tunable parts. */
+export function oecdSdmxUrl(dataflow, key, base = process.env.OECD_SDMX_BASE) {
+  const root = String(base || 'https://sdmx.oecd.org/public/rest/data').replace(/\/+$/, '');
+  const url = new URL(`${root}/${dataflow}/${key || 'all'}`);
+  url.searchParams.set('format', 'jsondata');
+  url.searchParams.set('lastNObservations', '1');
+  return url;
+}
+
+function oecdTaxProxy() {
+  const ttlMs = OECD_TAX_CACHE_TTL_MS;
+  const maxResponseBytes = 8 * 1024 * 1024;
+  const maxDiskCacheBytes = 16 * 1024 * 1024;
+  const cachePath = path.join(process.cwd(), '.gev-cache', 'oecd-tax-v1.json');
+  let cache = null;
+  let diskLoaded = false;
+  const inFlight = new Map();
+
+  async function loadDiskCache() {
+    if (diskLoaded) return;
+    diskLoaded = true;
+    try {
+      const stat = await fsp.stat(cachePath);
+      if (stat.size > maxDiskCacheBytes) throw new Error('cache file too large');
+      const parsed = JSON.parse(await fsp.readFile(cachePath, 'utf8'));
+      if (Number.isFinite(parsed?.at) && typeof parsed?.body === 'string') {
+        const body = JSON.parse(parsed.body);
+        if (body?.cit && body?.map) cache = parsed;
+      }
+    } catch { /* first run or invalid cache */ }
+  }
+
+  async function saveDiskCache(entry) {
+    try {
+      await fsp.mkdir(path.dirname(cachePath), { recursive: true });
+      await fsp.writeFile(cachePath, JSON.stringify(entry), 'utf8');
+    } catch (error) {
+      console.warn(`[oecd-tax-proxy] cache write failed: ${error?.message || error}`);
+    }
+  }
+
+  function send(res, status, body, cacheState) {
+    res.writeHead(status, {
+      'Content-Type': 'application/json',
+      'Cache-Control': status === 200 ? 'public, max-age=3600' : 'no-store',
+      'X-GEV-Cache': cacheState,
+    });
+    res.end(body);
+  }
+
+  async function fetchSdmxFeed(dataflow, key) {
+    const upstream = await fetch(oecdSdmxUrl(dataflow, key), {
+      signal: AbortSignal.timeout(20000),
+      headers: { Accept: 'application/vnd.sdmx.data+json, application/json' },
+    });
+    const body = await readResponseTextCapped(upstream, maxResponseBytes);
+    if (!upstream.ok) throw new Error(`upstream HTTP ${upstream.status}`);
+    return JSON.parse(body);
+  }
+
+  async function refreshUpstream() {
+    // Each sub-feed fails independently; only a double failure throws so the
+    // serve-stale path takes over. A half-available payload is cached — the
+    // layers merge whatever arrived and keep bundled figures for the rest.
+    const [citResult, mapResult] = await Promise.allSettled([
+      fetchSdmxFeed(
+        process.env.OECD_CIT_DATAFLOW || 'OECD.CTP.TPS,DSD_CTS@DF_CTS_CIT,1.0',
+        process.env.OECD_CIT_KEY || 'all',
+      ),
+      fetchSdmxFeed(
+        process.env.OECD_MAP_DATAFLOW || 'OECD.CTP.TPS,DSD_MAP@DF_MAP,1.0',
+        process.env.OECD_MAP_KEY || 'all',
+      ),
+    ]);
+    const cit = citResult.status === 'fulfilled' ? citResult.value : null;
+    const map = mapResult.status === 'fulfilled' ? mapResult.value : null;
+    for (const [label, settled] of [['cit', citResult], ['map', mapResult]]) {
+      if (settled.status === 'rejected') {
+        console.warn(`[oecd-tax-proxy] ${label} feed failed: ${settled.reason?.message || settled.reason}`);
+      }
+    }
+    const payload = normalizeOecdTaxPayload(cit, map);
+    if (payload.cit.status !== 'ready' && payload.map.status !== 'ready') {
+      throw new Error('no OECD sub-feed available');
+    }
+    const fresh = { at: Date.now(), body: JSON.stringify(payload) };
+    cache = fresh;
+    void saveDiskCache(fresh);
+    return fresh;
+  }
+
+  function install(middlewares) {
+    middlewares.use('/api/oecd-tax', async (req, res) => {
+      if (req.method !== 'GET') {
+        send(res, 405, JSON.stringify({ error: 'Method Not Allowed' }), 'NONE');
+        return;
+      }
+      await loadDiskCache();
+      const now = Date.now();
+      if (cache && now - cache.at < ttlMs) {
+        send(res, 200, cache.body, 'HIT');
+        return;
+      }
+      const stale = cache;
+      const request = coalesceProxyRequest(inFlight, 'oecd-tax', refreshUpstream);
+      try {
+        const fresh = await request.promise;
+        send(res, 200, fresh.body, request.shared ? 'INFLIGHT' : 'MISS');
+      } catch (error) {
+        if (stale) {
+          if (!request.shared) console.warn(`[oecd-tax-proxy] refresh failed (${error?.message || error}) — serving stale cache`);
+          send(res, 200, stale.body, 'STALE-ERROR');
+          return;
+        }
+        send(res, 502, JSON.stringify({ error: 'OECD tax data unavailable' }), 'NONE');
+      }
+    });
+  }
+
+  return {
+    name: 'oecd-tax-proxy',
     configureServer(server) {
       install(server.middlewares);
     },
@@ -7382,6 +7526,7 @@ export default defineConfig(({ mode }) => {
       tomtomProxy(),
       firmsProxy(),
       rocketLaunchesProxy(),
+      oecdTaxProxy(),
       terrainHeightsProxy(),
       adsbdbProxy(),
       overpassProxy(),

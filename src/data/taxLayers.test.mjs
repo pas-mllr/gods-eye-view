@@ -199,3 +199,25 @@ test('tp analyst mapper derives daysToGirDeadline from an injectable clock', () 
   assert.equal(none.daysToGirDeadline, null);
   assert.equal(none.pillarTwoStatus, null);
 });
+
+test('OECD live-merge patches carry values and provenance, and refuse bad feeds', async () => {
+  const { applyOecdToTpRecord, applyOecdToDisputesRecord } = await import('./taxAnalystRecords.js');
+  const payload = {
+    cit: { status: 'ready', period: '2025', byIso3: { DEU: 29.83 } },
+    map: { status: 'ready', period: '2024', byIso3: { DEU: 415 } },
+  };
+  assert.deepEqual(applyOecdToTpRecord({ iso3: 'DEU' }, payload), {
+    citRate: 29.83, citRateSource: 'oecd-live', citRateAsOf: '2025',
+  });
+  assert.deepEqual(applyOecdToDisputesRecord({ iso3: 'DEU' }, payload), {
+    mapInventoryTp: 415, mapStatsSource: 'oecd-live', mapStatsAsOf: '2024',
+  });
+  // Areas the feed does not cover, unavailable feeds, and junk stay bundled.
+  assert.equal(applyOecdToTpRecord({ iso3: 'BRA' }, payload), null);
+  assert.equal(applyOecdToTpRecord({ iso3: 'DEU' }, { cit: { status: 'unavailable', byIso3: {} } }), null);
+  assert.equal(applyOecdToTpRecord({ iso3: 'DEU' }, null), null);
+  assert.equal(
+    applyOecdToTpRecord({ iso3: 'DEU' }, { cit: { status: 'ready', byIso3: { DEU: 'oops' } } }),
+    null,
+  );
+});

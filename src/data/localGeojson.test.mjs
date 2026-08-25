@@ -1107,3 +1107,78 @@ test('a null markerColor result keeps the layer base color', async () => {
     harness.cleanup();
   }
 });
+
+test('liveUpdate merges patches in place, reaches analyst records, and degrades honestly', async () => {
+  let payload = { value: 42 };
+  const calls = { live: 0 };
+  const harness = await createRealLocalLayerHarness({
+    layerOptions: {
+      liveUpdate: async () => { calls.live += 1; return payload; },
+      applyLive: (props, data) => (data.value ? { liveValue: data.value, liveSource: 'test-live' } : null),
+      refreshInterval: 60_000,
+      liveSourceLabel: 'TEST · LIVE + BUNDLED',
+      analystRecord: (props, { id, lat, lon }) => ({ id, lat, lon, liveValue: props.liveValue ?? null }),
+    },
+  });
+  try {
+    // The manager runs update() right after enable; the harness only enables,
+    // so drive update() directly like the manager loop would.
+    assert.equal(harness.layer.refreshInterval, 60_000, 'refreshInterval passes through');
+    const first = await harness.layer.update(harness.viewer, {});
+    assert.notEqual(first, false, 'a live success never reads as lifecycle failure');
+    assert.equal(harness.layer.getAnalystRecords()[0].liveValue, 42,
+      'the in-place merge reaches analyst snapshots');
+    let stats = harness.layer.getStats();
+    assert.equal(stats.source, 'TEST · LIVE + BUNDLED', 'chip source flips to the live label');
+    assert.equal(stats.stale, undefined);
+    assert.equal(stats.live.status, 'ready');
+
+    // Later failure: bundled data intact, stale flagged, never error/false.
+    payload = null;
+    const second = await harness.layer.update(harness.viewer, {});
+    assert.notEqual(second, false, 'a live failure never reads as lifecycle failure');
+    stats = harness.layer.getStats();
+    assert.equal(stats.stale, true, 'a lapsed live overlay reports stale');
+    assert.equal(stats.error, null, 'the intact bundled dataset is not an error');
+    assert.equal(harness.layer.getAnalystRecords()[0].liveValue, 42,
+      'the last good merge survives the lapse');
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});
+
+test('a layer whose live feed never succeeds stays plainly bundled', async () => {
+  const harness = await createRealLocalLayerHarness({
+    layerOptions: {
+      liveUpdate: async () => { throw new Error('offline'); },
+      applyLive: () => null,
+      refreshInterval: 60_000,
+      liveSourceLabel: 'TEST · LIVE + BUNDLED',
+    },
+  });
+  try {
+    const outcome = await harness.layer.update(harness.viewer, {});
+    assert.notEqual(outcome, false);
+    const stats = harness.layer.getStats();
+    assert.equal(stats.source, undefined, 'no live label without a live merge');
+    assert.equal(stats.stale, undefined, 'never-live is not stale — it is simply bundled');
+    assert.equal(stats.live.status, 'none');
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});
+
+test('layers without live hooks keep the classic no-op update contract', async () => {
+  const harness = await createRealLocalLayerHarness();
+  try {
+    assert.equal(harness.layer.refreshInterval, 0, 'no hook, no refresh loop');
+    const outcome = await harness.layer.update(harness.viewer, {});
+    assert.notEqual(outcome, false);
+    assert.equal(harness.layer.getStats().live, undefined);
+  } finally {
+    harness.layer.destroy(harness.viewer);
+    harness.cleanup();
+  }
+});

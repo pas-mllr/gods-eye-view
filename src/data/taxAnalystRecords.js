@@ -93,5 +93,41 @@ export function mapDisputesAnalystRecord(props, { id, lat, lon } = {}) {
     icapMember: boolOrNull(props.icapMember),
     mliSigned: boolOrNull(props.mliSigned),
     participationExemption: boolOrNull(props.participationExemption),
+    mapStatsSource: textOrNull(props.mapStatsSource) || 'bundled',
+  };
+}
+
+/**
+ * Live-merge patch for one TP record: statutory CIT rate from the OECD CIT
+ * sub-feed, with provenance fields so cards/queries can say which figures
+ * are live vs bundled. Pure — consumed by taxLayers.js as its applyLive hook.
+ * @param {object} props Record properties (bundled + prior patches).
+ * @param {object} payload /api/oecd-tax payload.
+ * @returns {object|null} Patch, or null to leave the record untouched.
+ */
+export function applyOecdToTpRecord(props, payload) {
+  const value = payload?.cit?.status === 'ready' ? payload.cit.byIso3?.[props?.iso3] : undefined;
+  if (!Number.isFinite(value)) return null;
+  return {
+    citRate: value,
+    citRateSource: 'oecd-live',
+    citRateAsOf: payload.cit.period ?? null,
+  };
+}
+
+/**
+ * Live-merge patch for one disputes record: MAP TP caseload from the OECD
+ * MAP sub-feed, with provenance fields. Pure — taxLayers.js applyLive hook.
+ * @param {object} props Record properties.
+ * @param {object} payload /api/oecd-tax payload.
+ * @returns {object|null} Patch, or null to leave the record untouched.
+ */
+export function applyOecdToDisputesRecord(props, payload) {
+  const value = payload?.map?.status === 'ready' ? payload.map.byIso3?.[props?.iso3] : undefined;
+  if (!Number.isFinite(value)) return null;
+  return {
+    mapInventoryTp: value,
+    mapStatsSource: 'oecd-live',
+    mapStatsAsOf: payload.map.period ?? null,
   };
 }
