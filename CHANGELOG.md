@@ -5,6 +5,16 @@ of current runtime behavior, see [`docs/CURRENT-STATE.md`](docs/CURRENT-STATE.md
 
 ## [Unreleased] — 2026-08-24
 
+### Documentation
+
+- Added a prioritized eight-layer roadmap ("Layer roadmap — recommended,
+  not yet built") to `docs/TAX-ADVISORY.md`: Authority Posture, Dispute
+  Pipeline, and Indirect Tax/CTC Radar (Tier 1); Carbon & Levies, Trade &
+  Tariff Exposure, and Tonnage & Regimes (Tier 2); Public CbCR Peer and
+  GloBE Scenario (Tier 3) — each with its research rationale, an open data
+  source, and the existing seam it would ride. Documentation only; none of
+  these layers are built.
+
 ### Added
 
 - Upgraded the Tax Radar from snapshot to live/predictive: dated policy

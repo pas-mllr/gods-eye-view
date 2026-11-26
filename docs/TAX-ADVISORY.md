@@ -184,16 +184,99 @@ Follow the seven-step wiring above with a new dataset file, a new
 the first iteration: Pillar Two + e-invoicing state machines (on TP Radar),
 the OECD live overlay, the live tax-events layer, the entity-footprint
 source pack, intercompany flow arcs, and the PREDICTED risk overlay.
-Natural candidates for the next ones:
+Candidates for the next layers live in the
+[layer roadmap](#layer-roadmap-recommended-not-yet-built) below.
 
-- **Indirect tax depth**: standard VAT/GST rates and digital services taxes
-  as first-class fields (the e-invoicing state machine already landed).
-- **Public CbCR peer layer**: EU registers + ATO publications become a
-  scrapable per-country corpus from end-2026.
-- **A GloBE scenario engine**: what-if top-up tax per jurisdiction over the
-  footprint pack, built on the OECD GIR XML schema.
-- **Licensed live feeds**: any commercial tax feed rides the same
-  proxy-hardening pattern as the existing `/api/*` middlewares.
+## Layer roadmap (recommended, not yet built)
+
+This section is a recommendation, not shipped functionality: none of these
+layers exist yet. It records, in priority order, the layers that the
+ten-year research behind this console (real-time data-native authorities,
+authority AI risk-scoring, the exchange/transparency era, disputes shifting
+upstream, a restructuring profession, value moving pre-transaction, and
+multi-forum policy volatility) says a global tax team at a
+multinational — energy-major scale included — will need next. Each entry
+names the research force it answers, a realistic open data source, and the
+existing seam it would ride, so any of them can be picked up without
+re-deriving the design.
+
+### Tier 1 — highest value, buildable on existing seams
+
+1. **Authority Posture** — *"see what the authority sees."*
+   Per-jurisdiction tax-administration profile: AI/analytics audit selection
+   in use, SAF-T/e-audit powers, pre-filled return status,
+   cooperative-compliance or justified-trust program availability, ICAP
+   participation, typical statute of limitations. Roughly 69% of surveyed
+   administrations already run AI risk selection; advisors need to know
+   which counterpart they face before choosing between an APA, ICAP, or
+   litigation posture. Data: OECD Tax Administration series / ISORA
+   (published, structured). Seam: bundled-layer factory + the jurisdiction
+   index; also a natural new input to the PREDICTED risk score in
+   `src/data/entityRisk.js`.
+2. **Dispute Pipeline** — the group's own live audits, APAs, MAP cases, and
+   rulings (status, years and amounts at stake, next procedural deadline)
+   overlaid on MAP-congestion and authority-posture data. With disputes
+   shifting upstream and MAP averaging about 31 months, the portfolio view
+   is the controversy manager's daily screen. Seam: exactly the
+   entity-footprint source-pack pattern — env-pointed, confidential packs
+   never committed, a fictional demo pack shipped — plus the existing
+   deadline-urgency rendering in `src/data/taxPolicy.js`.
+3. **Indirect Tax / CTC Radar** — standard VAT/GST rates, digital services
+   taxes, e-invoicing mandate waves with per-phase thresholds, SAF-T
+   adoption, and pre-filled VAT status as a first-class layer (the
+   e-invoicing state machine already landed on TP Radar). The 2026–2030
+   continuous-transaction-controls wave is the most densely dated policy
+   calendar in the research corpus. Seam: the `taxPolicy.js` obligation
+   state machine + urgency bands, promoted to its own dataset and layer.
+
+### Tier 2 — sector-shaped (energy, trading, shipping)
+
+4. **Carbon & Levies** — carbon prices and ETS coverage, CBAM phase-in,
+   windfall/solidarity levies, extraction taxes per jurisdiction. For an
+   energy major the tax P&L increasingly arrives through climate and trade
+   instruments, and total-tax-transparency reporting (GRI 207) has to
+   narrate them. Data: World Bank Carbon Pricing Dashboard (open), the EU
+   CBAM timeline. Seam: bundled layer + a `topic=carbon` variant of the
+   tax-events feed query.
+5. **Trade & Tariff Exposure** — tariff lines and FTA coverage joined to
+   the group's actual commodity flows, where the console's AIS vessels
+   layer finally pays off for tax: a rerouted cargo shows its customs
+   valuation and VAT consequence. Tariff/TP/customs-valuation collisions
+   are a growing structural risk. Data: UN Comtrade (open). Seam: the
+   tax-flows arcs + `aisLiveVessels` + a curated tariff dataset.
+6. **Tonnage & Regimes** — special-regime coverage per jurisdiction:
+   tonnage tax (directly relevant to an LNG/shipping fleet), free zones,
+   patent/innovation boxes, investment incentives — each flagged for its
+   Pillar Two interaction (which incentives survive a 15% floor). Seam:
+   bundled layer; analyst joins answer "which of our entities' regimes are
+   eroded by GloBE?"
+
+### Tier 3 — the predictive build-out
+
+7. **Public CbCR Peer** — the first wave of EU public CbCR (FY2025 data)
+   and Australia's regime publish from late 2026, a genuinely new public
+   dataset; this layer puts peers' per-country profiles on the same map for
+   benchmarking and for anticipating external scrutiny. Data: EU national
+   registers, ATO publications, EDGAR XBRL tax tags. Seam: the `/api/*`
+   proxy-hardening pattern (cache, coalescing, serve-stale, sanitized
+   errors).
+8. **GloBE Scenario** — what-if top-up tax painted per jurisdiction over
+   the entity-footprint pack as transitional safe harbours expire (FY2027
+   onward), built on the OECD GIR XML schema — the most codified regime in
+   international tax and the right first "rules as code" target. Rendered
+   like everything predictive here: PREDICTED-labeled, inspectable, never
+   stated as fact. Seam: the deterministic-engine pattern of
+   `entityRisk.js`, scaled up; the scene director scrubbing a 2026→2030
+   timeline.
+
+Two standing rules bound every entry above. First, the no-person line:
+layers stay at entity/asset/jurisdiction level — no person-level tracking,
+including executive-travel or day-count monitoring for PE or residence
+purposes, however often that gets asked for. Second, provenance: predictive
+output always carries the `PREDICTED` label with an inspectable formula,
+and any licensed commercial feed rides the same proxy-hardening pattern as
+the existing `/api/*` middlewares rather than being fetched from the
+client.
 
 ## Honesty rules for refreshes
 
